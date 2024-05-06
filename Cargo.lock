@@ -2698,6 +2698,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "home"
+version = "0.5.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e3d1354bf6b7235cb4a0576c2619fd4ed18183f689b12b006a0ee7329eeff9a5"
+dependencies = [
+ "windows-sys 0.52.0",
+]
+
+[[package]]
 name = "http"
 version = "0.2.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7448,8 +7457,19 @@ dependencies = [
 name = "solana-svm"
 version = "2.0.0"
 dependencies = [
+ "base64 0.22.1",
  "bincode",
+ "borsh 1.5.1",
+ "bs58",
+ "clap 2.33.3",
+ "crossbeam-channel",
+ "env_logger",
+ "home",
  "itertools 0.12.1",
+ "jsonrpc-core",
+ "jsonrpc-core-client",
+ "jsonrpc-derive",
+ "jsonrpc-http-server",
  "lazy_static",
  "libsecp256k1",
  "log",
@@ -7459,24 +7479,43 @@ dependencies = [
  "prost-types",
  "qualifier_attr",
  "rand 0.8.5",
+ "regex",
  "rustc_version 0.4.0",
  "serde",
  "serde_derive",
+ "serde_yaml 0.9.34+deprecated",
+ "solana-account-decoder",
+ "solana-accounts-db",
  "solana-bpf-loader-program",
+ "solana-client",
  "solana-compute-budget",
  "solana-compute-budget-program",
+ "solana-core",
  "solana-frozen-abi",
  "solana-frozen-abi-macro",
+ "solana-geyser-plugin-manager",
+ "solana-gossip",
  "solana-loader-v4-program",
  "solana-logger",
  "solana-measure",
  "solana-metrics",
+ "solana-perf",
  "solana-program-runtime",
+ "solana-rpc",
+ "solana-rpc-client",
+ "solana-rpc-client-api",
  "solana-sdk",
  "solana-svm",
  "solana-system-program",
+ "solana-transaction-status",
  "solana-type-overrides",
+ "solana-version",
  "solana-vote",
+ "spl-token-2022",
+ "thiserror",
+ "tokio",
+ "tokio-util 0.7.11",
+ "yaml-rust",
 ]
 
 [[package]]
