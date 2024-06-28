@@ -13,9 +13,11 @@ use {
     solana_accounts_db::{
         accounts::Accounts,
         accounts_db::{AccountShrinkThreshold, AccountsDb, AccountsDbConfig},
-        accounts_index::AccountSecondaryIndexes,
+        accounts_index::{AccountsIndexConfig, AccountSecondaryIndexes, IndexLimitMb},
         ancestors::Ancestors,
         blockhash_queue::BlockhashQueue,
+        partitioned_rewards::TestPartitionedEpochRewards,
+        utils::create_and_canonicalize_directories,
     },
     solana_bpf_loader_program::syscalls::{
         SyscallAbort, SyscallGetClockSysvar, SyscallInvokeSignedRust, SyscallLog, SyscallMemcpy,
@@ -44,6 +46,7 @@ use {
         clock::{Clock, Epoch, Slot, UnixTimestamp, MAX_PROCESSING_AGE, MAX_TRANSACTION_FORWARDING_DELAY},
         exit::Exit,
         feature_set::FeatureSet,
+        genesis_config::GenesisConfig,
         hash::Hash,
         inner_instruction::InnerInstructions,
         message::{
@@ -89,11 +92,12 @@ use {
         any::type_name,
         cmp::min,
         collections::{HashMap, HashSet},
-        path::PathBuf,
+        path::{Path, PathBuf},
         sync::{
             atomic::{AtomicBool, Ordering},
             Arc, RwLock,
         },
+        thread::Builder,
         time::{SystemTime, UNIX_EPOCH},
     },
 };
@@ -321,23 +325,44 @@ impl JsonRpcRequestProcessor {
         config: JsonRpcConfig,
         exit: Arc<RwLock<Exit>>,
     ) -> Self {
-        let paths = vec![PathBuf::from("/home/dmakarov/work/try/simple-solana-program/test-ledger/accounts")];
+        let ledger_path = PathBuf::from("/home/dmakarov/work/try/simple-solana-program/test-ledger");
+        let paths = vec![ledger_path.join("accounts/run")];
         let accounts_db = AccountsDb::new_with_config(
             paths,
             &solana_sdk::genesis_config::ClusterType::Development,
             AccountSecondaryIndexes::default(),
             AccountShrinkThreshold::default(),
-            Some(AccountsDbConfig::default()),
+            Some(Self::get_accounts_db_config(&ledger_path)),
             None,
             Arc::new(AtomicBool::new(false)),
         );
-        let accounts = Accounts::new(Arc::new(accounts_db));
+        let accounts_db = Arc::new(accounts_db);
+        let accounts_db_clone = accounts_db.clone();
+        let handle = Builder::new()
+            .name("solNfyAccRestor".to_string())
+            .spawn(move || {
+                accounts_db_clone.notify_account_restore_from_snapshot();
+            })
+            .unwrap();
+
+        accounts_db.generate_index(
+            None,
+            true,
+            &GenesisConfig::default(),
+        );
+
+        handle.join().unwrap();
+        let accounts = Accounts::new(accounts_db);
         let ancestors = Ancestors::from(vec![EXECUTION_SLOT]);
         let batch_processor = TransactionBatchProcessor::<MockForkGraph>::new(
             EXECUTION_SLOT,
             EXECUTION_EPOCH,
             HashSet::new(),
         );
+
+
+
+
         Self {
             accounts: Arc::new(RwLock::new(accounts)),
             ancestors,
@@ -346,6 +371,46 @@ impl JsonRpcRequestProcessor {
             transaction_processor: Arc::new(RwLock::new(batch_processor)),
             transaction_log_collector: Arc::<RwLock<TransactionLogCollector>>::default(),
             transaction_log_collector_config: Arc::<RwLock<TransactionLogCollectorConfig>>::default(),
+        }
+    }
+
+    fn get_accounts_db_config(ledger_path: &Path) -> AccountsDbConfig {
+        let ledger_tool_ledger_path = ledger_path.join("ledger_tool");
+
+        let accounts_index_bins = None;
+        let accounts_index_index_limit_mb = IndexLimitMb::Unspecified;
+        let accounts_index_drives = vec![ledger_tool_ledger_path.join("accounts_index")];
+        let accounts_index_config = AccountsIndexConfig {
+            bins: accounts_index_bins,
+            index_limit_mb: accounts_index_index_limit_mb,
+            drives: Some(accounts_index_drives),
+            ..AccountsIndexConfig::default()
+        };
+
+        let test_partitioned_epoch_rewards = TestPartitionedEpochRewards::None;
+
+        let accounts_hash_cache_path = ledger_tool_ledger_path.join(AccountsDb::DEFAULT_ACCOUNTS_HASH_CACHE_DIR);
+        let accounts_hash_cache_path = create_and_canonicalize_directories([&accounts_hash_cache_path])
+            .unwrap_or_else(|err| {
+                eprintln!(
+                    "Unable to access accounts hash cache path '{}': {err}",
+                    accounts_hash_cache_path.display(),
+                );
+                std::process::exit(1);
+            })
+            .pop()
+            .unwrap();
+
+        AccountsDbConfig {
+            index: Some(accounts_index_config),
+            base_working_path: Some(ledger_tool_ledger_path),
+            accounts_hash_cache_path: Some(accounts_hash_cache_path),
+            ancient_append_vec_offset: None,
+            exhaustively_verify_refcounts: false,
+            skip_initial_hash_calc: false,
+            test_partitioned_epoch_rewards,
+            test_skip_rewrites_but_include_in_bank_hash: false,
+            ..AccountsDbConfig::default()
         }
     }
 
@@ -358,6 +423,41 @@ impl JsonRpcRequestProcessor {
                 blockhash: blockhash.to_string(),
                 last_valid_block_height,
             },
+        ))
+    }
+
+    fn get_snapshots_to_load(
+        snapshot_config: Option<&SnapshotConfig>,
+    ) -> Option<(
+        FullSnapshotArchiveInfo,
+        Option<IncrementalSnapshotArchiveInfo>,
+    )> {
+        let Some(snapshot_config) = snapshot_config else {
+            info!("Snapshots disabled; will load from genesis");
+            return None;
+        };
+
+        let Some(full_snapshot_archive_info) =
+            snapshot_utils::get_highest_full_snapshot_archive_info(
+                &snapshot_config.full_snapshot_archives_dir,
+            )
+        else {
+            warn!(
+                "No snapshot package found in directory: {}; will load from genesis",
+                snapshot_config.full_snapshot_archives_dir.display()
+            );
+            return None;
+        };
+
+        let incremental_snapshot_archive_info =
+            snapshot_utils::get_highest_incremental_snapshot_archive_info(
+                &snapshot_config.incremental_snapshot_archives_dir,
+                full_snapshot_archive_info.slot(),
+            );
+
+        Some((
+            full_snapshot_archive_info,
+            incremental_snapshot_archive_info,
         ))
     }
 

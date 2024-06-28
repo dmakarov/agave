@@ -726,6 +726,7 @@ impl<T: IndexValue, U: DiskIndexValue + From<T> + Into<T>> AccountsIndex<T, U> {
             .as_ref()
             .and_then(|config| config.bins)
             .unwrap_or(BINS_DEFAULT);
+        println!("allocate_accounts_index bins {bins:?}");
         // create bin_calculator early to verify # bins is reasonable
         let bin_calculator = PubkeyBinCalculator24::new(bins);
         let storage = AccountsIndexStorage::new(bins, &config, exit);

@@ -6,8 +6,15 @@ use std::{
     time::Duration,
 };
 
+pub mod archive_format;
 pub mod rpc_process;
 pub mod rpc_service;
+pub mod serde_snapshot;
+pub mod snapshot_archive_info;
+pub mod snapshot_config;
+pub mod snapshot_hash;
+pub mod snapshot_storage_rebuilder;
+pub mod snapshot_utils;
 
 fn main() {
     env_logger::init();

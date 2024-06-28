@@ -8959,6 +8959,7 @@ impl AccountsDb {
             let rent_paying = AtomicUsize::new(0);
             let amount_to_top_off_rent = AtomicU64::new(0);
             let total_including_duplicates = AtomicU64::new(0);
+            println!("SLOTS {slots:?}");
             let scan_time: u64 = slots
                 .par_chunks(chunk_size)
                 .map(|slots| {
@@ -8968,6 +8969,7 @@ impl AccountsDb {
                         outer_slots_len as u64,
                     );
                     let mut scan_time_sum = 0;
+                    println!("INDEX, SLOT LOOP");
                     for (index, slot) in slots.iter().enumerate() {
                         let mut scan_time = Measure::start("scan");
                         log_status.report(index as u64);
