@@ -394,7 +394,7 @@ impl AccountsDb {
     fn combine_ancient_slots_packed_internal(
         &self,
         sorted_slots: Vec<Slot>,
-        tuning: PackedAncientStorageTuning,
+        mut tuning: PackedAncientStorageTuning,
         metrics: &mut ShrinkStatsSub,
     ) {
         self.shrink_ancient_stats
@@ -502,12 +502,13 @@ impl AccountsDb {
     fn collect_sort_filter_ancient_slots(
         &self,
         slots: Vec<Slot>,
-        tuning: &PackedAncientStorageTuning,
+        tuning: &mut PackedAncientStorageTuning,
     ) -> AncientSlotInfos {
         let mut ancient_slot_infos = self.calc_ancient_slot_info(
             slots,
             tuning.can_randomly_shrink,
             tuning.ideal_storage_size,
+            tuning,
         );
 
         ancient_slot_infos.filter_ancient_slots(tuning, &self.shrink_ancient_stats);
@@ -548,6 +549,7 @@ impl AccountsDb {
         slots: Vec<Slot>,
         can_randomly_shrink: bool,
         ideal_size: NonZeroU64,
+        tuning: &mut PackedAncientStorageTuning,
     ) -> AncientSlotInfos {
         let len = slots.len();
         let mut infos = AncientSlotInfos {
@@ -586,6 +588,14 @@ impl AccountsDb {
             })
             .count()
             .saturating_sub(randoms as usize);
+        // ideal storage size is total alive bytes of ancient storages / half of max ancient slots
+        tuning.ideal_storage_size = NonZeroU64::new(
+            (infos.total_alive_bytes.0 / tuning.max_ancient_slots.max(1) as u64 * 2).max(5_000_000),
+        )
+        .unwrap();
+        self.shrink_ancient_stats
+            .ideal_storage_size
+            .store(tuning.ideal_storage_size.into(), Ordering::Relaxed);
         self.shrink_ancient_stats
             .slots_eligible_to_shrink
             .fetch_add(should_shrink_count as u64, Ordering::Relaxed);
@@ -2548,14 +2558,7 @@ pub mod tests {
                         );
                     }
                     TestCollectInfo::CalcAncientSlotInfo => {
-                        infos = db.calc_ancient_slot_info(
-                            vec![slot1],
-                            can_randomly_shrink,
-                            NonZeroU64::new(get_ancient_append_vec_capacity()).unwrap(),
-                        );
-                    }
-                    TestCollectInfo::CollectSortFilterInfo => {
-                        let tuning = PackedAncientStorageTuning {
+                        let mut tuning = PackedAncientStorageTuning {
                             percent_of_alive_shrunk_data: 100,
                             max_ancient_slots: 0,
                             // irrelevant for what this test is trying to test, but necessary to avoid minimums
@@ -2564,7 +2567,24 @@ pub mod tests {
                             can_randomly_shrink,
                             ..default_tuning()
                         };
-                        infos = db.collect_sort_filter_ancient_slots(vec![slot1], &tuning);
+                        infos = db.calc_ancient_slot_info(
+                            vec![slot1],
+                            can_randomly_shrink,
+                            NonZeroU64::new(get_ancient_append_vec_capacity()).unwrap(),
+                            &mut tuning,
+                        );
+                    }
+                    TestCollectInfo::CollectSortFilterInfo => {
+                        let mut tuning = PackedAncientStorageTuning {
+                            percent_of_alive_shrunk_data: 100,
+                            max_ancient_slots: 0,
+                            // irrelevant for what this test is trying to test, but necessary to avoid minimums
+                            ideal_storage_size: NonZeroU64::new(get_ancient_append_vec_capacity())
+                                .unwrap(),
+                            can_randomly_shrink,
+                            ..default_tuning()
+                        };
+                        infos = db.collect_sort_filter_ancient_slots(vec![slot1], &mut tuning);
                     }
                 }
                 assert_eq!(infos.all_infos.len(), 1, "{method:?}");
@@ -2613,10 +2633,19 @@ pub mod tests {
                     high_slot,
                 );
             } else {
+                let mut tuning = PackedAncientStorageTuning {
+                    percent_of_alive_shrunk_data: 100,
+                    max_ancient_slots: 0,
+                    // irrelevant for what this test is trying to test, but necessary to avoid minimums
+                    ideal_storage_size: NonZeroU64::new(get_ancient_append_vec_capacity()).unwrap(),
+                    can_randomly_shrink,
+                    ..default_tuning()
+                };
                 infos = db.calc_ancient_slot_info(
                     vec![slot1],
                     can_randomly_shrink,
                     NonZeroU64::new(get_ancient_append_vec_capacity()).unwrap(),
+                    &mut tuning,
                 );
             }
             assert!(infos.all_infos.is_empty());
@@ -2629,6 +2658,7 @@ pub mod tests {
     #[test]
     fn test_calc_ancient_slot_info_several() {
         let can_randomly_shrink = false;
+        let mut tuning = default_tuning();
         for alive in [true, false] {
             for slots in 0..4 {
                 // 1_040_000 is big enough relative to page size to cause shrink ratio to be triggered
@@ -2647,6 +2677,7 @@ pub mod tests {
                         slot_vec.clone(),
                         can_randomly_shrink,
                         NonZeroU64::new(get_ancient_append_vec_capacity()).unwrap(),
+                        &mut tuning,
                     );
                     if !alive {
                         assert!(infos.all_infos.is_empty());
@@ -2688,6 +2719,7 @@ pub mod tests {
     #[test]
     fn test_calc_ancient_slot_info_one_alive_one_dead() {
         let can_randomly_shrink = false;
+        let mut tuning = default_tuning();
         for method in TestCollectInfo::iter() {
             for slot1_is_alive in [false, true] {
                 let alives = [false /*dummy*/, slot1_is_alive, !slot1_is_alive];
@@ -2729,12 +2761,13 @@ pub mod tests {
                             slot_vec.clone(),
                             can_randomly_shrink,
                             NonZeroU64::new(get_ancient_append_vec_capacity()).unwrap(),
+                            &mut tuning,
                         ),
                         TestCollectInfo::Add => {
                             continue; // unsupportable
                         }
                         TestCollectInfo::CollectSortFilterInfo => {
-                            let tuning = PackedAncientStorageTuning {
+                            let mut tuning = PackedAncientStorageTuning {
                                 percent_of_alive_shrunk_data: 100,
                                 max_ancient_slots: 0,
                                 // irrelevant
@@ -2745,7 +2778,7 @@ pub mod tests {
                                 can_randomly_shrink,
                                 ..default_tuning()
                             };
-                            db.collect_sort_filter_ancient_slots(slot_vec.clone(), &tuning)
+                            db.collect_sort_filter_ancient_slots(slot_vec.clone(), &mut tuning)
                         }
                     };
                     assert_eq!(infos.all_infos.len(), 1, "method: {method:?}");
@@ -3108,6 +3141,7 @@ pub mod tests {
     #[test]
     fn test_calc_ancient_slot_info_one_shrink_one_not() {
         let can_randomly_shrink = false;
+        let mut tuning = default_tuning();
         for method in TestCollectInfo::iter() {
             for slot1_shrink in [false, true] {
                 let shrinks = [false /*dummy*/, slot1_shrink, !slot1_shrink];
@@ -3149,12 +3183,13 @@ pub mod tests {
                         slot_vec.clone(),
                         can_randomly_shrink,
                         NonZeroU64::new(get_ancient_append_vec_capacity()).unwrap(),
+                        &mut tuning,
                     ),
                     TestCollectInfo::Add => {
                         continue; // unsupportable
                     }
                     TestCollectInfo::CollectSortFilterInfo => {
-                        let tuning = PackedAncientStorageTuning {
+                        let mut tuning = PackedAncientStorageTuning {
                             percent_of_alive_shrunk_data: 100,
                             max_ancient_slots: 0,
                             // irrelevant for what this test is trying to test, but necessary to avoid minimums
@@ -3164,7 +3199,7 @@ pub mod tests {
                             ..default_tuning()
                         };
                         // note this can sort infos.all_infos
-                        db.collect_sort_filter_ancient_slots(slot_vec.clone(), &tuning)
+                        db.collect_sort_filter_ancient_slots(slot_vec.clone(), &mut tuning)
                     }
                 };
 
