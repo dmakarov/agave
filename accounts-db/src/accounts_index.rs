@@ -654,7 +654,6 @@ pub enum AccountsIndexScanResult {
     UnrefLog0,
 }
 
-#[derive(Debug)]
 /// T: account info type to interact in in-memory items
 /// U: account info type to be persisted to disk
 pub struct AccountsIndex<T: IndexValue, U: DiskIndexValue + From<T> + Into<T>> {
@@ -697,6 +696,30 @@ pub struct AccountsIndex<T: IndexValue, U: DiskIndexValue + From<T> + Into<T>> {
 
     /// populated at generate_index time - accounts that could possibly be rent paying
     pub rent_paying_accounts_by_partition: OnceLock<RentPayingAccountsByPartition>,
+}
+
+impl<T: IndexValue, U: DiskIndexValue + From<T> + Into<T>> std::fmt::Debug for AccountsIndex<T, U> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut output = String::from("AccountsIndex {\n");
+        output.push_str(&format!("    account_maps: {:?}\n", self.account_maps));
+        output.push_str(&format!("    bin_calculator: {:?}\n", self.bin_calculator));
+        output.push_str(&format!("    program_id_index: {:?}\n", self.program_id_index));
+        output.push_str(&format!("    spl_token_mint_index: {:?}\n", self.spl_token_mint_index));
+        output.push_str(&format!("    spl_token_owner_index: {:?}\n", self.spl_token_owner_index));
+        output.push_str(&format!("    roots_tracker: {:?}\n", self.roots_tracker));
+        output.push_str(&format!("    ongoing_scan_roots: {:?}\n", self.ongoing_scan_roots));
+        output.push_str(&format!("    removed_bank_ids: {:?}\n", self.removed_bank_ids));
+        output.push_str(&format!("    storage: {:?}\n", self.storage));
+        output.push_str(&format!("    scan_results_limit_bytes: {:?}\n", self.scan_results_limit_bytes));
+        output.push_str(&format!("    purge_older_root_entries_one_slot_list: {:?}\n", self.purge_older_root_entries_one_slot_list));
+        output.push_str(&format!("    roots_added: {:?}\n", self.roots_added));
+        output.push_str(&format!("    roots_removed: {:?}\n", self.roots_removed));
+        output.push_str(&format!("    active_scans: {:?}\n", self.active_scans));
+        output.push_str(&format!("    max_distance_to_min_scan_slot: {:?}\n", self.max_distance_to_min_scan_slot));
+        output.push_str(&format!("    unref_zero_count: {:?}\n", self.unref_zero_count));
+        output.push_str(&format!("    rent_paying_accounts_by_partition: {:?}\n", self.rent_paying_accounts_by_partition));
+        write!(f, "{}}}", output)
+    }
 }
 
 impl<T: IndexValue, U: DiskIndexValue + From<T> + Into<T>> AccountsIndex<T, U> {

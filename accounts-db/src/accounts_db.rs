@@ -65,6 +65,7 @@ use {
         cache_hash_data::{CacheHashData, DeletionPolicy as CacheHashDeletionPolicy},
         contains::Contains,
         epoch_accounts_hash::EpochAccountsHashManager,
+        format_field,
         partitioned_rewards::{PartitionedEpochRewardsConfig, TestPartitionedEpochRewards},
         read_only_accounts_cache::ReadOnlyAccountsCache,
         sorted_storages::SortedStorages,
@@ -1316,8 +1317,7 @@ struct RemoveUnrootedSlotsSynchronization {
 
 type AccountInfoAccountsIndex = AccountsIndex<AccountInfo, AccountInfo>;
 
-// This structure handles the load/store of the accounts
-#[derive(Debug)]
+/// This structure handles the load/store of the accounts
 pub struct AccountsDb {
     /// Keeps tracks of index into AppendVec on a per slot basis
     pub accounts_index: AccountInfoAccountsIndex,
@@ -1703,6 +1703,69 @@ pub struct PubkeyHashAccount {
     pub pubkey: Pubkey,
     pub hash: AccountHash,
     pub account: AccountSharedData,
+}
+
+impl std::fmt::Debug for AccountsDb {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut output = String::from("AccountsDb {\n");
+        format_field!(output, "    accounts_index:", self.accounts_index);
+        output.push_str(&format!("    ancient_append_vec_offset: {:?}\n", self.ancient_append_vec_offset));
+        output.push_str(&format!("    skip_initial_hash_calc: {}\n", self.skip_initial_hash_calc));
+        output.push_str(&format!("    storage: {:?}\n", self.storage));
+        output.push_str(&format!("    create_ancient_storage: {:?}\n", self.create_ancient_storage));
+        output.push_str(&format!("    test_skip_rewrites_but_include_in_bank_hash: {}\n", self.test_skip_rewrites_but_include_in_bank_hash));
+        output.push_str(&format!("    accounts_cache: {:?}\n", self.accounts_cache));
+        output.push_str(&format!("    write_cache_limit_bytes: {:?}\n", self.write_cache_limit_bytes));
+        output.push_str(&format!("    sender_bg_hasher: {:?}\n", self.sender_bg_hasher));
+        output.push_str(&format!("    read_only_accounts_cache: {:?}\n", self.read_only_accounts_cache));
+        output.push_str(&format!("    next_id: {:?}\n", self.next_id));
+        output.push_str(&format!("    shrink_candidate_slots: {:?}\n", self.shrink_candidate_slots));
+        output.push_str(&format!("    write_version: {:?}\n", self.write_version));
+        output.push_str(&format!("    paths: {:?}\n", self.paths));
+        output.push_str(&format!("    base_working_path: {:?}\n", self.base_working_path));
+        output.push_str(&format!("    base_working_temp_dir: {:?}\n", self.base_working_temp_dir));
+        output.push_str(&format!("    accounts_hash_cache_path: {:?}\n", self.accounts_hash_cache_path));
+        output.push_str(&format!("    shrink_paths: {:?}\n", self.shrink_paths));
+        output.push_str(&format!("    temp_paths: {:?}\n", self.temp_paths));
+        output.push_str(&format!("    file_size: {:?}\n", self.file_size));
+        output.push_str(&format!("    thread_pool: {:?}\n", self.thread_pool));
+        output.push_str(&format!("    thread_pool_clean: {:?}\n", self.thread_pool_clean));
+        output.push_str(&format!("    bank_hash_stats: Mutex {:?}\n", self.bank_hash_stats.lock().unwrap()));
+        output.push_str(&format!("    accounts_delta_hashes: Mutex {:?}\n", self.accounts_delta_hashes.lock().unwrap()));
+        output.push_str(&format!("    accounts_hashes: Mutex {:?}\n", self.accounts_hashes.lock().unwrap()));
+        output.push_str(&format!("    incremental_accounts_hashes: Mutex {:?}\n", self.incremental_accounts_hashes.lock().unwrap()));
+        format_field!(output, "    stats:", self.stats);
+        format_field!(output, "    clean_accounts_stats:", self.clean_accounts_stats);
+        format_field!(output, "    external_purge_slots_stats:", self.external_purge_slots_stats);
+        format_field!(output, "    shrink_stats:", self.shrink_stats);
+        format_field!(output, "    shrink_ancient_stats:", self.shrink_ancient_stats);
+        output.push_str(&format!("    cluster_type: {:?}\n", self.cluster_type));
+        output.push_str(&format!("    account_indexes: {:?}\n", self.account_indexes));
+        output.push_str(&format!("    uncleaned_pubkeys: {:?}\n", self.uncleaned_pubkeys));
+        #[cfg(test)]
+        output.push_str(&format!("    load_delay: {:?}\n", self.load_delay));
+        #[cfg(test)]
+        output.push_str(&format!("    load_limit: {:?}\n", self.load_limit));
+        output.push_str(&format!("    is_bank_drop_callback_enabled: {:?}\n", self.is_bank_drop_callback_enabled));
+        output.push_str(&format!("    remove_unrooted_slots_synchronization: {:?}\n", self.remove_unrooted_slots_synchronization));
+        output.push_str(&format!("    shrink_ratio: {:?}\n", self.shrink_ratio));
+        output.push_str(&format!("    dirty_stores: {:?}\n", self.dirty_stores));
+        output.push_str(&format!("    zero_lamport_accounts_to_purge_after_full_snapshot: {:?}\n", self.zero_lamport_accounts_to_purge_after_full_snapshot));
+        output.push_str(&format!("    accounts_update_notifier: {:?}\n", self.accounts_update_notifier));
+        output.push_str(&format!("    active_stats: {:?}\n", self.active_stats));
+        output.push_str(&format!("    verify_accounts_hash_in_bg: {:?}\n", self.verify_accounts_hash_in_bg));
+        output.push_str(&format!("    log_dead_slots: {:?}\n", self.log_dead_slots));
+        output.push_str(&format!("    exhaustively_verify_refcounts: {:?}\n", self.exhaustively_verify_refcounts));
+        output.push_str(&format!("    accounts_file_provider: {:?}\n", self.accounts_file_provider));
+        output.push_str(&format!("    storage_access: {:?}\n", self.storage_access));
+        output.push_str(&format!("    scan_filter_for_shrinking: {:?}\n", self.scan_filter_for_shrinking));
+        output.push_str(&format!("    partitioned_epoch_rewards_config: {:?}\n", self.partitioned_epoch_rewards_config));
+        output.push_str(&format!("    epoch_accounts_hash_manager: {:?}\n", self.epoch_accounts_hash_manager));
+        output.push_str(&format!("    latest_full_snapshot_slot: SeqLock {:?}\n", self.latest_full_snapshot_slot.read()));
+        output.push_str(&format!("    is_experimental_accumulator_hash_enabled: {:?}\n", self.is_experimental_accumulator_hash_enabled));
+        output.push_str(&format!("    best_ancient_slots_to_shrink: RwLock {:?}\n", self.best_ancient_slots_to_shrink.read()));
+        write!(f, "{}}}", output)
+    }
 }
 
 impl AccountsDb {
