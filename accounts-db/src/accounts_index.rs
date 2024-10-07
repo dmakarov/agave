@@ -2017,6 +2017,7 @@ impl<T: IndexValue, U: DiskIndexValue + From<T> + Into<T>> AccountsIndex<T, U> {
     }
 
     pub fn add_root(&self, slot: Slot) {
+        println!("\nAccountsIndex::add_root: slot {slot}");
         self.roots_added.fetch_add(1, Ordering::Relaxed);
         let mut w_roots_tracker = self.roots_tracker.write().unwrap();
         // `AccountsDb::flush_accounts_cache()` relies on roots being added in order

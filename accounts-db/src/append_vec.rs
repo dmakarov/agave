@@ -15,6 +15,7 @@ use {
         accounts_index::ZeroLamport,
         buffered_reader::{BufferedReader, BufferedReaderStatus},
         file_io::read_into_buffer,
+        format_field,
         storable_accounts::StorableAccounts,
         u64_align,
     },
@@ -247,7 +248,6 @@ struct Mmap {
 /// restrictions are placed on reading. That is, one may read items from one thread while another
 /// is appending new items.
 #[cfg_attr(feature = "frozen-abi", derive(AbiExample))]
-#[derive(Debug)]
 pub struct AppendVec {
     /// The file path where the data is stored.
     path: PathBuf,
@@ -266,6 +266,19 @@ pub struct AppendVec {
 
     /// if true, remove file when dropped
     remove_file_on_drop: AtomicBool,
+}
+
+impl std::fmt::Debug for AppendVec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut output = String::from("AppendVec {\n");
+        output.push_str(&format!("    path: {:?}\n", self.path));
+        format_field!(output, "    backing:", self.backing);
+        output.push_str(&format!("    append_lock: {:?}\n", self.append_lock));
+        output.push_str(&format!("    current_len: {:?}\n", self.current_len));
+        output.push_str(&format!("    file_size: {:?}\n", self.file_size));
+        output.push_str(&format!("    remove_file_on_drop: {:?}\n", self.remove_file_on_drop));
+        write!(f, "{}}}", output)
+    }
 }
 
 const PAGE_SIZE: u64 = 4 * 1024;

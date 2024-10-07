@@ -543,11 +543,21 @@ struct LoadAccountsIndexForShrink<'a, T: ShrinkCollectRefs<'a>> {
 
 /// reference an account found during scanning a storage. This is a byval struct to replace
 /// `StoredAccountMeta`
-#[derive(Debug, PartialEq, Copy, Clone)]
+#[derive(PartialEq, Copy, Clone)]
 pub struct AccountFromStorage {
     pub index_info: AccountInfo,
     pub data_len: u64,
     pub pubkey: Pubkey,
+}
+
+impl std::fmt::Debug for AccountFromStorage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut output = String::from("AccountFromStorage {\n");
+        format_field!(output, "    index_info:", self.index_info);
+        output.push_str(&format!("    data_len: {:?}\n", self.data_len));
+        output.push_str(&format!("    pubkey: {:?}\n", self.pubkey));
+        write!(f, "{}}}", output)
+    }
 }
 
 impl ZeroLamport for AccountFromStorage {
@@ -586,6 +596,20 @@ pub struct GetUniqueAccountsResult {
     pub stored_accounts: Vec<AccountFromStorage>,
     pub capacity: u64,
     pub num_duplicated_accounts: usize,
+}
+
+impl std::fmt::Debug for GetUniqueAccountsResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut output = String::from("GetUniqueAccountsResult {\n");
+        output.push_str("    stored_accounts: [\n");
+        for sa in &self.stored_accounts {
+            format_field!(output, "    ", sa);
+        }
+        output.push_str("    ]\n");
+        output.push_str(&format!("    capacity: {:?}\n", self.capacity));
+        output.push_str(&format!("    num_duplicated_accounts: {:?}\n", self.num_duplicated_accounts));
+        write!(f, "{}}}", output)
+    }
 }
 
 pub struct AccountsAddRootTiming {
@@ -1075,7 +1099,6 @@ struct CleanKeyTimings {
 }
 
 /// Persistent storage structure holding the accounts
-#[derive(Debug)]
 pub struct AccountStorageEntry {
     pub(crate) id: AccountsFileId,
 
@@ -1092,6 +1115,18 @@ pub struct AccountStorageEntry {
     count_and_status: SeqLock<(usize, AccountStorageStatus)>,
 
     alive_bytes: AtomicUsize,
+}
+
+impl std::fmt::Debug for AccountStorageEntry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut output = String::from("AccountStorageEntry {\n");
+        output.push_str(&format!("    id: {:?}\n", self.id));
+        output.push_str(&format!("    slot: {:?}\n", self.slot));
+        format_field!(output, "    accounts:", self.accounts);
+        output.push_str(&format!("    count_and_status: {:?}\n", self.count_and_status.read()));
+        output.push_str(&format!("    alive_bytes: {:?}\n", self.alive_bytes));
+        write!(f, "{}}}", output)
+    }
 }
 
 impl AccountStorageEntry {
@@ -2385,6 +2420,7 @@ impl AccountsDb {
     /// get the oldest slot that is within one epoch of the highest known root.
     /// The slot will have been offset by `self.ancient_append_vec_offset`
     fn get_oldest_non_ancient_slot(&self, epoch_schedule: &EpochSchedule) -> Slot {
+        println!("\nGET_OLDEST_NON_ANCIENT_SLOT: max_root_inclusive {}", self.accounts_index.max_root_inclusive());
         self.get_oldest_non_ancient_slot_from_slot(
             epoch_schedule,
             self.accounts_index.max_root_inclusive(),
@@ -2401,11 +2437,13 @@ impl AccountsDb {
         let mut result = max_root_inclusive;
         if let Some(offset) = self.ancient_append_vec_offset {
             result = Self::apply_offset_to_slot(result, offset);
+            println!("\nGET_OLDEST_NON_ANCIENT_SLOT_FROM_SLOT: offset {}, result {}", offset, result);
         }
         result = Self::apply_offset_to_slot(
             result,
             -((epoch_schedule.slots_per_epoch as i64).saturating_sub(1)),
         );
+        println!("    GET_OLDEST_NON_ANCIENT_SLOT_FROM_SLOT: result {} max_root_inclusive {}", result, max_root_inclusive);
         result.min(max_root_inclusive)
     }
 
@@ -3743,6 +3781,7 @@ impl AccountsDb {
     /// Shrinks `store` by rewriting the alive accounts to a new storage
     fn shrink_storage(&self, store: &AccountStorageEntry) {
         let slot = store.slot();
+        println!("\nAccountsDb::SHRINK_STORAGE: slot {slot}");
         if self.accounts_cache.contains(slot) {
             // It is not correct to shrink a slot while it is in the write cache until flush is complete and the slot is removed from the write cache.
             // There can exist a window after a slot is made a root and before the write cache flushing for that slot begins and then completes.
@@ -3759,9 +3798,11 @@ impl AccountsDb {
         }
         let unique_accounts =
             self.get_unique_accounts_from_storage_for_shrink(store, &self.shrink_stats);
+        println!("\n    AccountsDb::SHRINK_STORAGE: unique_accounts {unique_accounts:?}");
         debug!("do_shrink_slot_store: slot: {}", slot);
         let shrink_collect =
             self.shrink_collect::<AliveAccounts<'_>>(store, &unique_accounts, &self.shrink_stats);
+        println!("\n    AccountsDb::SHRINK_STORAGE: shrink_collect {shrink_collect:?}");
 
         // This shouldn't happen if alive_bytes is accurate.
         // However, it is possible that the remaining alive bytes could be 0. In that case, the whole slot should be marked dead by clean.
@@ -4027,6 +4068,14 @@ impl AccountsDb {
     }
 
     fn get_roots_less_than(&self, slot: Slot) -> Vec<Slot> {
+        println!(
+            "\nGET_ROOTS_LESS_THAN({slot}): alive_roots {:?}",
+            self.accounts_index
+                .roots_tracker
+                .read()
+                .unwrap()
+                .alive_roots
+        );
         self.accounts_index
             .roots_tracker
             .read()
@@ -4039,6 +4088,7 @@ impl AccountsDb {
     /// or which could need to be combined into a new or existing ancient append vec
     /// offset is used to combine newer slots than we normally would. This is designed to be used for testing.
     fn get_sorted_potential_ancient_slots(&self, oldest_non_ancient_slot: Slot) -> Vec<Slot> {
+        println!("\nGET_SORTED_POTENTIAL_ANCIENT_SLOTS: oldest_non_ancient_slot {oldest_non_ancient_slot:?}");
         let mut ancient_slots = self.get_roots_less_than(oldest_non_ancient_slot);
         ancient_slots.sort_unstable();
         ancient_slots
@@ -4047,11 +4097,16 @@ impl AccountsDb {
     /// get a sorted list of slots older than an epoch
     /// squash those slots into ancient append vecs
     pub fn shrink_ancient_slots(&self, epoch_schedule: &EpochSchedule) {
+        println!(
+            "\nSHRINK_ANCIENT_SLOTS: self.create_ancient_storage {:?}",
+            self.create_ancient_storage
+        );
         if self.ancient_append_vec_offset.is_none() {
             return;
         }
 
         let oldest_non_ancient_slot = self.get_oldest_non_ancient_slot(epoch_schedule);
+        println!("\n    SHRINK_ANCIENT_SLOTS: oldest_non_ancient_slot {oldest_non_ancient_slot}");
         let can_randomly_shrink = true;
         let sorted_slots = self.get_sorted_potential_ancient_slots(oldest_non_ancient_slot);
         if self.create_ancient_storage == CreateAncientStorage::Append {
@@ -4456,12 +4511,16 @@ impl AccountsDb {
         // for shrinking.
         if shrink_slots.len() < SHRINK_INSERT_ANCIENT_THRESHOLD {
             let ancients = self.best_ancient_slots_to_shrink.read().unwrap();
+            println!("\nAccountsDb::SHRINK_CANDIDATE_SLOTS: ancients {:?}", ancients);
             for (slot, capacity) in ancients.iter() {
+                println!("\n    AccountsDb::SHRINK_CANDIDATE_SLOTS: slot {}, capacity {:?}", slot, capacity);
                 if let Some(store) = self.storage.get_slot_storage_entry(*slot) {
+                    println!("\n    AccountsDb::shrink_candidate_slots: store {:?}", store);
                     if !shrink_slots.contains(slot)
                         && *capacity == store.capacity()
                         && Self::is_candidate_for_shrink(self, &store)
                     {
+                        println!("\n    AccountsDb::SHRINK_CANDIDATE_SLOTS: insert in slot {:?} store {:?}", *slot, store);
                         let ancient_bytes_added_to_shrink = store.alive_bytes() as u64;
                         shrink_slots.insert(*slot, store);
                         self.shrink_stats
@@ -10028,6 +10087,7 @@ pub mod tests {
         mark_alive: bool,
         account_data_size: Option<u64>,
     ) -> Arc<AccountStorageEntry> {
+        println!("\nSAMPLE_STORAGE_WITH_ENTRIES_ID: slot {slot} id {id} pubkey {pubkey:?}");
         sample_storage_with_entries_id_fill_percentage(
             tf,
             slot,
@@ -12114,6 +12174,58 @@ pub mod tests {
             pubkey_count_after_shrink,
             accounts.all_account_count_in_accounts_file(shrink_slot)
         );
+    }
+
+    #[test]
+    fn test_shrink_candidate_slots_with_ancient_slots() {
+        solana_logger::setup();
+
+
+        let epoch_schedule = EpochSchedule::default();
+        println!("\nepoch schedule {epoch_schedule:?}");
+        let mut db = AccountsDb::new_single_for_tests();
+        println!("\naccounts database {db:?}");
+        let starting_ancient_slot = 1;
+        let num_ancient_slots = 1;
+        create_storages_and_update_index(&db, None, starting_ancient_slot, num_ancient_slots, true, None);
+        let storage = db.storage.get_slot_storage_entry(starting_ancient_slot).unwrap();
+        println!("\nstorage {storage:?}");
+        let created_accounts = db.get_unique_accounts_from_storage(&storage);
+        println!("\ncreated_accounts {created_accounts:?}");
+        db.calculate_accounts_delta_hash(starting_ancient_slot);
+        db.add_root_and_flush_write_cache(starting_ancient_slot);
+
+
+        let pubkey_count = 30;
+        let pubkeys: Vec<_> = (0..pubkey_count)
+            .map(|_| solana_sdk::pubkey::new_rand())
+            .collect();
+        let some_lamport = 223;
+        let no_data = 0;
+        let owner = *AccountSharedData::default().owner();
+        let account = AccountSharedData::new(some_lamport, no_data, &owner);
+        let offset = db.ancient_append_vec_offset.unwrap().abs() as u64;
+        let mut current_slot = epoch_schedule.slots_per_epoch + offset;
+        current_slot += 1;
+        for pubkey in &pubkeys {
+            db.store_for_tests(current_slot, &[(pubkey, &account)]);
+        }
+        db.calculate_accounts_delta_hash(current_slot);
+        db.add_root_and_flush_write_cache(current_slot);
+        current_slot += 1;
+        let pubkey_count_after_shrink = 25;
+        let updated_pubkeys = &pubkeys[0..pubkey_count - pubkey_count_after_shrink];
+        for pubkey in updated_pubkeys {
+            db.store_for_tests(current_slot, &[(pubkey, &account)]);
+        }
+        db.calculate_accounts_delta_hash(current_slot);
+        db.add_root_and_flush_write_cache(current_slot);
+        db.clean_accounts_for_tests();
+        db.shrink_ancient_slots(&epoch_schedule);
+        db.shrink_ratio = AccountShrinkThreshold::TotalSpace { shrink_ratio: 0.4 };
+        db.shrink_candidate_slots(&epoch_schedule);
+
+
     }
 
     #[test]

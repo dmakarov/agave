@@ -7,6 +7,7 @@ use {
         accounts_db::AccountsFileId,
         accounts_file::ALIGN_BOUNDARY_OFFSET,
         accounts_index::{IsCached, ZeroLamport},
+        format_field,
     },
     modular_bitfield::prelude::*,
 };
@@ -74,7 +75,7 @@ const CACHED_OFFSET: OffsetReduced = (1 << (OffsetReduced::BITS - 1)) - 1;
 
 #[bitfield(bits = 32)]
 #[repr(C)]
-#[derive(Debug, Default, Copy, Clone, Eq, PartialEq)]
+#[derive(Default, Copy, Clone, Eq, PartialEq)]
 pub struct PackedOffsetAndFlags {
     /// this provides 2^31 bits, which when multiplied by 8 (sizeof(u64)) = 16G, which is the maximum size of an append vec
     offset_reduced: B31,
@@ -82,7 +83,16 @@ pub struct PackedOffsetAndFlags {
     is_zero_lamport: bool,
 }
 
-#[derive(Default, Debug, PartialEq, Eq, Clone, Copy)]
+impl std::fmt::Debug for PackedOffsetAndFlags {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut output = String::from("PackedOffsetAndFlags {\n");
+        output.push_str(&format!("    offset_reduced: {:?}\n", self.offset_reduced()));
+        output.push_str(&format!("    is_zero_lamport: {:?}\n", self.is_zero_lamport()));
+        write!(f, "{}}}", output)
+    }
+}
+
+#[derive(Default, PartialEq, Eq, Clone, Copy)]
 pub struct AccountInfo {
     /// index identifying the append storage
     store_id: AccountsFileId,
@@ -90,11 +100,28 @@ pub struct AccountInfo {
     account_offset_and_flags: AccountOffsetAndFlags,
 }
 
-#[derive(Default, Debug, PartialEq, Eq, Clone, Copy)]
+impl std::fmt::Debug for AccountInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut output = String::from("AccountInfo {\n");
+        output.push_str(&format!("    store_id: {:?}\n", self.store_id));
+        format_field!(output, "    account_offset_and_flags:", self.account_offset_and_flags);
+        write!(f, "{}}}", output)
+    }
+}
+
+#[derive(Default, PartialEq, Eq, Clone, Copy)]
 pub struct AccountOffsetAndFlags {
     /// offset = 'packed_offset_and_flags.offset_reduced()' * ALIGN_BOUNDARY_OFFSET into the storage
     /// Note this is a smaller type than 'Offset'
     packed_offset_and_flags: PackedOffsetAndFlags,
+}
+
+impl std::fmt::Debug for AccountOffsetAndFlags {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut output = String::from("AccountOffsetAndFlags {\n");
+        format_field!(output, "    packed_offset_and_flags:", self.packed_offset_and_flags);
+        write!(f, "{}}}", output)
+    }
 }
 
 impl ZeroLamport for AccountInfo {

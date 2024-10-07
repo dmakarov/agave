@@ -4,6 +4,7 @@ use {
         account_storage::meta::StoredAccountMeta,
         accounts_db::AccountsFileId,
         append_vec::{AppendVec, AppendVecError, IndexInfo},
+        format_field,
         storable_accounts::StorableAccounts,
         tiered_storage::{
             error::TieredStorageError, hot::HOT_FORMAT, index::IndexOffset, TieredStorage,
@@ -59,12 +60,26 @@ pub enum StorageAccess {
 
 pub type Result<T> = std::result::Result<T, AccountsFileError>;
 
-#[derive(Debug)]
 /// An enum for accessing an accounts file which can be implemented
 /// under different formats.
 pub enum AccountsFile {
     AppendVec(AppendVec),
     TieredStorage(TieredStorage),
+}
+
+impl std::fmt::Debug for AccountsFile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut output = String::from("AccountsFile {\n");
+        match self {
+            Self::AppendVec(av) => {
+                format_field!(output, "    AppendVec:", av);
+            }
+            Self::TieredStorage(ts) => {
+                format_field!(output, "    TieredStorage:", ts);
+            }
+        }
+        write!(f, "{}}}", output)
+    }
 }
 
 impl AccountsFile {

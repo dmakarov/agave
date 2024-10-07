@@ -32,7 +32,6 @@ use {
 const HIGH_SLOT_OFFSET: u64 = 100;
 
 /// ancient packing algorithm tuning per pass
-#[derive(Debug)]
 struct PackedAncientStorageTuning {
     /// shrink enough of these ancient append vecs to realize this% of the total dead data that needs to be shrunk
     /// Doing too much burns too much time and disk i/o.
@@ -46,6 +45,18 @@ struct PackedAncientStorageTuning {
     can_randomly_shrink: bool,
     /// limit the max # of output storages to prevent packing from running too long
     max_resulting_storages: NonZeroU64,
+}
+
+impl std::fmt::Debug for PackedAncientStorageTuning {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut output = String::from("PackedAncientStorageTuning {\n");
+        output.push_str(&format!("    percent_of_alive_shrunk_data: {:?}\n", self.percent_of_alive_shrunk_data));
+        output.push_str(&format!("    max_ancient_slots: {:?}\n", self.max_ancient_slots));
+        output.push_str(&format!("    ideal_storage_size: {:?}\n", self.ideal_storage_size));
+        output.push_str(&format!("    can_randomly_shrink: {:?}\n", self.can_randomly_shrink));
+        output.push_str(&format!("    max_resulting_storages: {:?}\n", self.max_resulting_storages));
+        write!(f, "{}}}", output)
+    }
 }
 
 /// info about a storage eligible to be combined into an ancient append vec.
@@ -68,7 +79,7 @@ struct SlotInfo {
 
 /// info for all storages in ancient slots
 /// 'all_infos' contains all slots and storages that are ancient
-#[derive(Default, Debug)]
+#[derive(Default)]
 struct AncientSlotInfos {
     /// info on all ancient storages
     all_infos: Vec<SlotInfo>,
@@ -81,6 +92,18 @@ struct AncientSlotInfos {
     total_alive_bytes: Saturating<u64>,
     /// best_slots_to_shrink
     best_slots_to_shrink: Vec<(Slot, u64)>,
+}
+
+impl std::fmt::Debug for AncientSlotInfos {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut output = String::from("AncientSlotInfos {\n");
+        output.push_str(&format!("    all_infos: {:?}\n", self.all_infos));
+        output.push_str(&format!("    shrink_indexes: {:?}\n", self.shrink_indexes));
+        output.push_str(&format!("    total_alive_bytes_shrink: {:?}\n", self.total_alive_bytes_shrink));
+        output.push_str(&format!("    total_alive_bytes: {:?}\n", self.total_alive_bytes));
+        output.push_str(&format!("    best_slots_to_shrink: {:?}\n", self.best_slots_to_shrink));
+        write!(f, "{}}}", output)
+    }
 }
 
 impl AncientSlotInfos {
@@ -166,6 +189,7 @@ impl AncientSlotInfos {
 
     /// clear 'should_shrink' for storages after a cutoff to limit how many storages we shrink
     fn clear_should_shrink_after_cutoff(&mut self, tuning: &PackedAncientStorageTuning) {
+        println!("\nCLEAR_SHOULD_SHRINK_AFTER_CUTOFF: tuning {tuning:?}");
         let mut bytes_to_shrink_due_to_ratio = Saturating(0);
         // shrink enough slots to write 'percent_of_alive_shrunk_data'% of the total alive data
         // from slots that exceeded the shrink threshold.
@@ -179,8 +203,10 @@ impl AncientSlotInfos {
                     * tuning.percent_of_alive_shrunk_data
                     / 100,
             );
+        println!("\n    CLEAR_SHOULD_SHRINK_AFTER_CUTOFF: self.shrink_indexes.len() {}", self.shrink_indexes.len());
         self.best_slots_to_shrink = Vec::with_capacity(self.shrink_indexes.len());
         for info_index in &self.shrink_indexes {
+            println!("\n    CLEAR_SHOULD_SHRINK_AFTER_CUTOFF: info index {info_index:?}");
             let info = &mut self.all_infos[*info_index];
             self.best_slots_to_shrink.push((info.slot, info.capacity));
             if bytes_to_shrink_due_to_ratio.0 >= threshold_bytes {
@@ -397,11 +423,19 @@ impl AccountsDb {
         tuning: PackedAncientStorageTuning,
         metrics: &mut ShrinkStatsSub,
     ) {
+        println!(
+            "\nCOMBINE_ANCIENT_SLOTS_PACKED_INTERNAL: sorted slots {:?}, tuning {:?}",
+            sorted_slots, tuning
+        );
         self.shrink_ancient_stats
             .slots_considered
             .fetch_add(sorted_slots.len() as u64, Ordering::Relaxed);
         let mut ancient_slot_infos = self.collect_sort_filter_ancient_slots(sorted_slots, &tuning);
 
+        println!(
+            "\n    COMBINE_ANCIENT_SLOTS_PACKED_INTERNAL: ancient_slot_infos {:?}",
+            ancient_slot_infos
+        );
         std::mem::swap(
             &mut *self.best_ancient_slots_to_shrink.write().unwrap(),
             &mut ancient_slot_infos.best_slots_to_shrink,
@@ -504,6 +538,7 @@ impl AccountsDb {
         slots: Vec<Slot>,
         tuning: &PackedAncientStorageTuning,
     ) -> AncientSlotInfos {
+        println!("\nCOLLECT_SORT_FILTER_ANCIENT_SLOTS: slots {slots:?}, tuning {tuning:?}");
         let mut ancient_slot_infos = self.calc_ancient_slot_info(
             slots,
             tuning.can_randomly_shrink,
@@ -549,6 +584,7 @@ impl AccountsDb {
         can_randomly_shrink: bool,
         ideal_size: NonZeroU64,
     ) -> AncientSlotInfos {
+        println!("\nCALC_ANCIENT_SLOT_INFO: slots {slots:?}, can_randomly_shrink {can_randomly_shrink}, ideal_size {ideal_size:?}");
         let len = slots.len();
         let mut infos = AncientSlotInfos {
             shrink_indexes: Vec::with_capacity(len),
@@ -2492,6 +2528,9 @@ pub mod tests {
         let storage = db.storage.get_slot_storage_entry(slot1).unwrap();
         let created_accounts = db.get_unique_accounts_from_storage(&storage);
 
+        println!("\nGET_ONE_PACKED_ANCIENT_APPEND_VEC_AND_OTHERS: before calling combine_ancient_slots_packed storage {storage:?}");
+        println!("    created_accounts {created_accounts:?}");
+
         db.combine_ancient_slots_packed(vec![slot1], CAN_RANDOMLY_SHRINK_FALSE);
         assert!(db.storage.get_slot_storage_entry(slot1).is_some());
         let after_store = db.storage.get_slot_storage_entry(slot1).unwrap();
@@ -2500,6 +2539,12 @@ pub mod tests {
             capacity: after_capacity,
             ..
         } = db.get_unique_accounts_from_storage(&after_store);
+        println!("\nGET_ONE_PACKED_ANCIENT_APPEND_VEC_AND_OTHERS: after calling combine_ancient_slots_packed storage {after_store:?}");
+        println!("    stored_accounts: [");
+        for sa in &after_stored_accounts {
+            println!("        {sa:?}");
+        }
+        println!("    ]\n    after_capacity {after_capacity}");
         assert_eq!(created_accounts.capacity, after_capacity);
         assert_eq!(created_accounts.stored_accounts.len(), 1);
         // always 1 account: either we leave the append vec alone if it is all dead
@@ -3581,6 +3626,7 @@ pub mod tests {
     #[test]
     fn test_combine_packed_ancient_slots_simple() {
         for alive in [false, true] {
+            println!("\nTEST_COMBINE_PACKED_ANCIENT_SLOTS_SIMPLE: alive {alive}");
             _ = get_one_packed_ancient_append_vec_and_others(alive, 0);
         }
     }
