@@ -1454,6 +1454,21 @@ struct CleaningInfo {
 /// included in the returned value.
 type CleaningCandidates = (Box<[RwLock<HashMap<Pubkey, CleaningInfo>>]>, Option<Slot>);
 
+#[derive(Debug, Default)]
+pub struct DeadAccounts {
+    slot_to_pubkeys: HashMap<Slot, Vec<Pubkey>>,
+}
+
+impl DeadAccounts {
+    pub fn add_for_slot(&mut self, slot: &Slot, dead_pubkeys: &mut Vec<Pubkey>) {
+        if let Some(entry) = self.slot_to_pubkeys.get_mut(slot) {
+            entry.append(dead_pubkeys);
+        } else {
+            self.slot_to_pubkeys.insert(*slot, dead_pubkeys.to_vec());
+        }
+    }
+}
+
 /// Removing unrooted slots in Accounts Background Service needs to be synchronized with flushing
 /// slots from the Accounts Cache.  This keeps track of those slots and the Mutex + Condvar for
 /// synchronization.
@@ -1633,6 +1648,8 @@ pub struct AccountsDb {
     /// Members are Slot and capacity. If capacity is smaller, then
     /// that means the storage was already shrunk.
     pub(crate) best_ancient_slots_to_shrink: RwLock<VecDeque<(Slot, u64)>>,
+
+    pub(crate) dead_accounts_pending: RwLock<DeadAccounts>,
 }
 
 /// results from 'split_storages_ancient'
@@ -2080,6 +2097,7 @@ impl AccountsDb {
             epoch_accounts_hash_manager: EpochAccountsHashManager::new_invalid(),
             latest_full_snapshot_slot: SeqLock::new(None),
             best_ancient_slots_to_shrink: RwLock::default(),
+            dead_accounts_pending: RwLock::default(),
         };
 
         new.start_background_hasher();
@@ -2772,10 +2790,10 @@ impl AccountsDb {
         }
     }
 
-    // Purge zero lamport accounts and older rooted account states as garbage
-    // collection
-    // Only remove those accounts where the entire rooted history of the account
-    // can be purged because there are no live append vecs in the ancestors
+    /// Purge zero lamport accounts and older rooted account states as
+    /// garbage collection.  Only remove those accounts where the
+    /// entire rooted history of the account can be purged because
+    /// there are no live append vecs in the ancestors.
     pub fn clean_accounts(
         &self,
         max_clean_root_inclusive: Option<Slot>,
@@ -3147,6 +3165,20 @@ impl AccountsDb {
                 i64
             ),
             (
+                "slots_with_dead_accounts",
+                self.clean_accounts_stats
+                    .slots_with_dead_accounts
+                    .swap(0, Ordering::Relaxed),
+                i64
+            ),
+            (
+                "total_dead_accounts",
+                self.clean_accounts_stats
+                    .total_dead_accounts
+                    .swap(0, Ordering::Relaxed),
+                i64
+            ),
+            (
                 "clean_old_root_us",
                 self.clean_accounts_stats
                     .clean_old_root_us
@@ -3437,15 +3469,17 @@ impl AccountsDb {
         );
     }
 
-    /// load the account index entry for the first `count` items in `accounts`
-    /// store a reference to all alive accounts in `alive_accounts`
-    /// store all pubkeys dead in `slot_to_shrink` in `pubkeys_to_unref`
-    /// return sum of account size for all alive accounts
+    /// Load the account index entry for the items in `accounts`.
+    /// Return
+    /// - a reference to all alive accounts in `alive_accounts`,
+    /// - all pubkeys dead in `slot_to_shrink` in `pubkeys_to_unref`,
+    /// - all pubkeys of zero lamport accounts with ref_count 1 in
+    ///   `zero_lamport_single_ref_pubkeys`.
     fn load_accounts_index_for_shrink<'a, T: ShrinkCollectRefs<'a>>(
         &self,
+        slot_to_shrink: Slot,
         accounts: &'a [AccountFromStorage],
         stats: &ShrinkStats,
-        slot_to_shrink: Slot,
     ) -> LoadAccountsIndexForShrink<'a, T> {
         let count = accounts.len();
         let mut alive_accounts = T::with_capacity(count, slot_to_shrink);
@@ -3655,7 +3689,7 @@ impl AccountsDb {
                         mut pubkeys_to_unref,
                         all_are_zero_lamports,
                         mut zero_lamport_single_ref_pubkeys,
-                    } = self.load_accounts_index_for_shrink(stored_accounts, stats, slot);
+                    } = self.load_accounts_index_for_shrink(slot, stored_accounts, stats);
 
                     // collect
                     alive_accounts_collect
@@ -7780,6 +7814,18 @@ impl AccountsDb {
                         // sort so offsets are in order. This improves efficiency of loading the accounts.
                         offsets.sort_unstable();
                         let dead_bytes = store.accounts.get_account_sizes(&offsets).iter().sum();
+                        let mut dead_accounts = offsets
+                            .iter()
+                            .map(|offset| {
+                                store
+                                    .accounts
+                                    .get_stored_account_meta_callback(*offset, |stored_account| {
+                                        stored_account.pubkey().clone()
+                                    })
+                                    .unwrap()
+                            })
+                            .collect::<Vec<_>>();
+                        self.dead_accounts_pending.write().unwrap().add_for_slot(slot, &mut dead_accounts);
                         store.remove_accounts(dead_bytes, reset_accounts, offsets.len());
                         if Self::is_shrinking_productive(&store)
                             && self.is_candidate_for_shrink(&store)
@@ -7801,6 +7847,14 @@ impl AccountsDb {
         self.clean_accounts_stats
             .remove_dead_accounts_remove_us
             .fetch_add(measure.as_us(), Ordering::Relaxed);
+
+        self.clean_accounts_stats
+            .slots_with_dead_accounts
+            .fetch_add(self.dead_accounts_pending.read().unwrap().slot_to_pubkeys.len() as u64, Ordering::Relaxed);
+
+        self.clean_accounts_stats
+            .total_dead_accounts
+            .fetch_add(self.dead_accounts_pending.read().unwrap().slot_to_pubkeys.iter().map(|v| v.1.len()).collect::<Vec<usize>>().iter().sum::<usize>() as u64, Ordering::Relaxed);
 
         let mut measure = Measure::start("shrink");
         let mut shrink_candidate_slots = self.shrink_candidate_slots.lock().unwrap();
