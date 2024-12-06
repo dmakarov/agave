@@ -3835,7 +3835,7 @@ impl AccountsDb {
             );
         }
 
-        error!("remove_old_stores_shrink: drop dead_storages {dead_storages_len}");
+        // error!("remove_old_stores_shrink: drop dead_storages {dead_storages_len}");
         let (_, drop_storage_entries_elapsed) = measure_us!(drop(dead_storages));
         time.stop();
 
@@ -4733,7 +4733,7 @@ impl AccountsDb {
             }
         }
 
-        error!("shrink_candidate_slots remaining dead_accounts_pending slots {:#?}, selected candidates {:#?}", self.dead_accounts_pending.read().unwrap().slot_to_pubkeys.len(), num_selected);
+        error!("shrink_candidate_slots: dead_accounts_pending: #slots {:#?} remain, selected candidates {:#?}", self.dead_accounts_pending.read().unwrap().slot_to_pubkeys.len(), num_selected);
 
         datapoint_info!(
             "shrink_candidate_slots",
