@@ -334,6 +334,7 @@ impl AccountsDb {
         sorted_slots: Vec<Slot>,
         can_randomly_shrink: bool,
     ) {
+        log::error!("combine_ancient_slots_packed: dead_accounts_pending: number of slots {:#?}", self.dead_accounts_pending.read().unwrap().slot_to_pubkeys.len());
         let tuning = PackedAncientStorageTuning {
             // Slots old enough to be ancient.
             max_ancient_slots: self.max_ancient_storages,
@@ -409,6 +410,7 @@ impl AccountsDb {
             .ideal_storage_size
             .store(tuning.ideal_storage_size.into(), Ordering::Relaxed);
 
+        log::error!("combine_ancient_slots_packed_internal: best_slots_to_shrink number {:#?}", ancient_slot_infos.best_slots_to_shrink.len());
         std::mem::swap(
             &mut *self.best_ancient_slots_to_shrink.write().unwrap(),
             &mut ancient_slot_infos.best_slots_to_shrink,
