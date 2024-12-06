@@ -4639,7 +4639,6 @@ impl AccountsDb {
     }
 
     pub fn shrink_candidate_slots(&self, epoch_schedule: &EpochSchedule) -> usize {
-        log::error!("shrink_candidate_slots: dead_accounts_pending: number of slots {:#?}", self.dead_accounts_pending.read().unwrap().slot_to_pubkeys.len());
         let oldest_non_ancient_slot = self.get_oldest_non_ancient_slot(epoch_schedule);
 
         let shrink_candidates_slots =
@@ -4649,6 +4648,7 @@ impl AccountsDb {
             .store(shrink_candidates_slots.len() as u64, Ordering::Relaxed);
 
         let candidates_count = shrink_candidates_slots.len();
+        log::error!("shrink_candidate_slots: dead_accounts_pending: #slots {}, #candidates {candidates_count}", self.dead_accounts_pending.read().unwrap().slot_to_pubkeys.len());
         let ((mut shrink_slots, shrink_slots_next_batch), select_time_us) = measure_us!({
             if let AccountShrinkThreshold::TotalSpace { shrink_ratio } = self.shrink_ratio {
                 let (shrink_slots, shrink_slots_next_batch) =
@@ -4733,7 +4733,7 @@ impl AccountsDb {
             }
         }
 
-        error!("shrink_candidate_slots remaining dead_accounts_pending slots {:#?}, selected candidates {:#?}", self.dead_accounts_pending.read().unwrap().slot_to_pubkeys.len(), num_selected);
+        // error!("shrink_candidate_slots remaining dead_accounts_pending slots {:#?}, selected candidates {:#?}", self.dead_accounts_pending.read().unwrap().slot_to_pubkeys.len(), num_selected);
 
         datapoint_info!(
             "shrink_candidate_slots",
