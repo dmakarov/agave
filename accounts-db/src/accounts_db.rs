@@ -3835,6 +3835,7 @@ impl AccountsDb {
             );
         }
 
+        error!("remove_old_stores_shrink: drop dead_storages {dead_storages_len}");
         let (_, drop_storage_entries_elapsed) = measure_us!(drop(dead_storages));
         time.stop();
 
