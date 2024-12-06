@@ -1060,10 +1060,10 @@ impl<'a> PackedAncientStorage<'a> {
                 break;
             }
             // we know the full contents of this packed storage now
-            log::error!("Push packed ancient storage bytes {bytes_total}");
-            for acc in &accounts_to_write {
-                log::error!("slot {}", acc.0);
-            }
+            // log::error!("Push packed ancient storage bytes {bytes_total}");
+            // for acc in &accounts_to_write {
+            //     log::error!("slot {}", acc.0);
+            // }
             result.push(PackedAncientStorage {
                 bytes: bytes_total as u64,
                 accounts: accounts_to_write,
