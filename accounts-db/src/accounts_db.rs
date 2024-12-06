@@ -3997,27 +3997,27 @@ impl AccountsDb {
 
         self.unref_shrunk_dead_accounts(shrink_collect.pubkeys_to_unref.iter().cloned(), slot);
 
-        let total_accounts_after_shrink = shrink_collect.alive_accounts.len();
+        //let total_accounts_after_shrink = shrink_collect.alive_accounts.len();
         let mut stats_sub = ShrinkStatsSub::default();
         let mut rewrite_elapsed = Measure::start("rewrite_elapsed");
         let (shrink_in_progress, time_us) =
             measure_us!(self.get_store_for_shrink(slot, shrink_collect.alive_total_bytes as u64));
         stats_sub.create_and_insert_store_elapsed_us = Saturating(time_us);
-        error!("shrink_storage: slot: {}, number of accounts: existing {} -> alive {}, bytes: existing {} -> alive {}, reduction {}\nshrink_storage: old store {} new store {}",
-            slot,
-            shrink_collect.total_starting_accounts,
-            total_accounts_after_shrink,
-            shrink_collect.capacity,
-            shrink_collect.alive_total_bytes,
-            shrink_collect.capacity - shrink_collect.alive_total_bytes as u64,
-               match &shrink_in_progress.old_store.accounts {
-                   AccountsFile::AppendVec(v) => v.path().to_str().unwrap(),
-                   _ => "unknown"
-               },
-               match &shrink_in_progress.new_store.accounts {
-                   AccountsFile::AppendVec(v) => v.path().to_str().unwrap(),
-                   _ => "unknown"
-               });
+        // error!("shrink_storage: slot: {}, number of accounts: existing {} -> alive {}, bytes: existing {} -> alive {}, reduction {}\nshrink_storage: old store {} new store {}",
+        //     slot,
+        //     shrink_collect.total_starting_accounts,
+        //     total_accounts_after_shrink,
+        //     shrink_collect.capacity,
+        //     shrink_collect.alive_total_bytes,
+        //     shrink_collect.capacity - shrink_collect.alive_total_bytes as u64,
+        //        match &shrink_in_progress.old_store.accounts {
+        //            AccountsFile::AppendVec(v) => v.path().to_str().unwrap(),
+        //            _ => "unknown"
+        //        },
+        //        match &shrink_in_progress.new_store.accounts {
+        //            AccountsFile::AppendVec(v) => v.path().to_str().unwrap(),
+        //            _ => "unknown"
+        //        });
 
         // here, we're writing back alive_accounts. That should be an atomic operation
         // without use of rather wide locks in this whole function, because we're
@@ -4733,7 +4733,7 @@ impl AccountsDb {
             }
         }
 
-        // error!("shrink_candidate_slots remaining dead_accounts_pending slots {:#?}, selected candidates {:#?}", self.dead_accounts_pending.read().unwrap().slot_to_pubkeys.len(), num_selected);
+        error!("shrink_candidate_slots remaining dead_accounts_pending slots {:#?}, selected candidates {:#?}", self.dead_accounts_pending.read().unwrap().slot_to_pubkeys.len(), num_selected);
 
         datapoint_info!(
             "shrink_candidate_slots",
