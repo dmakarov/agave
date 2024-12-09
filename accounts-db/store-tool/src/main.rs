@@ -10,6 +10,7 @@ use {
         account::ReadableAccount, pubkey::Pubkey, system_instruction::MAX_PERMITTED_DATA_LENGTH,
     },
     std::{
+        collections::HashMap,
         fs, io,
         mem::ManuallyDrop,
         num::Saturating,
@@ -17,6 +18,7 @@ use {
     },
 };
 
+const CMD_ANALYZE: &str = "analyze";
 const CMD_INSPECT: &str = "inspect";
 const CMD_SEARCH: &str = "search";
 
@@ -29,6 +31,24 @@ fn main() {
         .global_setting(AppSettings::InferSubcommands)
         .global_setting(AppSettings::UnifiedHelpMessage)
         .global_setting(AppSettings::VersionlessSubcommands)
+        .subcommand(
+            SubCommand::with_name(CMD_ANALYZE)
+                .about("Analyze account storage directory")
+                .arg(
+                    Arg::with_name("path")
+                        .index(1)
+                        .takes_value(true)
+                        .value_name("PATH")
+                        .help("Account storage directory to inspect"),
+                )
+                .arg(
+                    Arg::with_name("verbose")
+                        .short("v")
+                        .long("verbose")
+                        .takes_value(false)
+                        .help("Show additional account information"),
+                ),
+        )
         .subcommand(
             SubCommand::with_name(CMD_INSPECT)
                 .about("Inspects an account storage file and display each account's information")
@@ -78,6 +98,7 @@ fn main() {
     let subcommand = matches.subcommand();
     let subcommand_str = subcommand.0.to_string();
     match subcommand {
+        (CMD_ANALYZE, Some(subcommand_matches)) => cmd_analyze(&matches, subcommand_matches),
         (CMD_INSPECT, Some(subcommand_matches)) => cmd_inspect(&matches, subcommand_matches),
         (CMD_SEARCH, Some(subcommand_matches)) => cmd_search(&matches, subcommand_matches),
         _ => unreachable!(),
@@ -86,6 +107,15 @@ fn main() {
         eprintln!("Error: '{subcommand_str}' failed: {err}");
         std::process::exit(1);
     });
+}
+
+fn cmd_analyze(
+    _app_matches: &ArgMatches<'_>,
+    subcommand_matches: &ArgMatches<'_>,
+) -> Result<(), String> {
+    let path = value_t_or_exit!(subcommand_matches, "path", String);
+    let verbose = subcommand_matches.is_present("verbose");
+    do_analyze(path, verbose)
 }
 
 fn cmd_inspect(
@@ -106,6 +136,89 @@ fn cmd_search(
     let addresses = HashSet::from_iter(addresses);
     let verbose = subcommand_matches.is_present("verbose");
     do_search(path, addresses, verbose)
+}
+
+fn get_files_in(dir: impl AsRef<Path>) -> Result<Vec<PathBuf>, io::Error> {
+    let mut files = Vec::new();
+    let entries = fs::read_dir(dir)?;
+    for entry in entries {
+        let path = entry?.path();
+        if path.is_file() {
+            let path = fs::canonicalize(path)?;
+            files.push(path);
+        }
+    }
+    Ok(files)
+}
+
+fn do_analyze(
+    dir: impl AsRef<Path>,
+    _verbose: bool,
+) -> Result<(), String> {
+    let files = get_files_in(&dir).map_err(|err| {
+        format!(
+            "failed to get files in dir '{}': {err}",
+            dir.as_ref().display(),
+        )
+    })?;
+    let mut accounts: HashMap<Pubkey, Vec<u64>> = HashMap::new();
+    let mut storages: HashMap<u64, HashMap<Pubkey, usize>> = HashMap::new();
+    let mut acc_in_more_than_two_storages = 0u64;
+    files.iter().for_each(|file| {
+        let Ok(storage) = AppendVec::new_for_store_tool(file).inspect_err(|err| {
+            eprintln!(
+                "failed to open account storage file '{}': {err}",
+                file.display(),
+            )
+        }) else {
+            return;
+        };
+        // By default, when the AppendVec is dropped, the backing file will be removed.
+        // We do not want to remove the backing file here in the store-tool, so prevent dropping.
+        let storage = ManuallyDrop::new(storage);
+        let slot = file.file_stem().expect("path is a file");
+        let slot = slot.to_str().unwrap();
+        let slot = u64::from_str_radix(slot, 10).expect("unexpected file name");
+        let mut storage_entry = HashMap::new();
+        storage.scan_accounts(|account| {
+            let pubkey = account.pubkey();
+            let size = account.data_len();
+            storage_entry.insert(*pubkey, size);
+            if let Some(entry) = accounts.get_mut(pubkey) {
+                entry.push(slot);
+            } else {
+                let mut v = Vec::new();
+                v.push(slot);
+                accounts.insert(*pubkey, v);
+            }
+        });
+        if storages.contains_key(&slot) {
+            println!("two different storages for the same slot {slot}");
+        }
+        storages.insert(slot, storage_entry);
+    });
+
+    let mut dead_bytes: usize = 0;
+    let dead_count = accounts.iter().filter(|(k, v)| {
+        if v.len() > 1 {
+            if v.len() > 2 {
+                acc_in_more_than_two_storages += 1;
+            }
+            let mut v_sorted = Vec::with_capacity(v.len());
+            (0..v.len()).for_each(|_| v_sorted.push(0));
+            v_sorted.copy_from_slice(v);
+            v_sorted.sort();
+            v_sorted.pop();
+            dead_bytes += v_sorted.iter().map(|v| storages.get(v).unwrap().get(k).unwrap()).sum::<usize>();
+            true
+        } else {
+            false
+        }
+    }).count();
+    println!("found {} unique pubkeys, of which {} are dead, total dead_bytes {}", accounts.len(), dead_count, dead_bytes);
+    println!("{} accounts found in more than 2 storages", acc_in_more_than_two_storages);
+
+    Ok(())
 }
 
 fn do_inspect(file: impl AsRef<Path>, verbose: bool) -> Result<(), String> {
@@ -158,19 +271,6 @@ fn do_search(
     addresses: HashSet<Pubkey>,
     verbose: bool,
 ) -> Result<(), String> {
-    fn get_files_in(dir: impl AsRef<Path>) -> Result<Vec<PathBuf>, io::Error> {
-        let mut files = Vec::new();
-        let entries = fs::read_dir(dir)?;
-        for entry in entries {
-            let path = entry?.path();
-            if path.is_file() {
-                let path = fs::canonicalize(path)?;
-                files.push(path);
-            }
-        }
-        Ok(files)
-    }
-
     let files = get_files_in(&dir).map_err(|err| {
         format!(
             "failed to get files in dir '{}': {err}",

@@ -282,6 +282,8 @@ pub struct CleanAccountsStats {
     pub uncleaned_roots_slot_list_1: AtomicU64,
     pub get_account_sizes_us: AtomicU64,
     pub slots_cleaned: AtomicU64,
+    pub slots_with_dead_accounts: AtomicU64,
+    pub total_dead_accounts: AtomicU64,
 }
 
 impl CleanAccountsStats {

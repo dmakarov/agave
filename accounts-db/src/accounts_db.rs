@@ -1454,6 +1454,54 @@ struct CleaningInfo {
 /// included in the returned value.
 type CleaningCandidates = (Box<[RwLock<HashMap<Pubkey, CleaningInfo>>]>, Option<Slot>);
 
+#[derive(Debug, Default)]
+pub struct DeadSlotInfo {
+    accounts: Vec<Pubkey>,
+    size: usize,
+}
+
+#[derive(Debug, Default)]
+pub struct DeadAccounts {
+    pub slot_to_pubkeys: HashMap<Slot, DeadSlotInfo>,
+}
+
+impl DeadAccounts {
+    pub fn add_for_slot(
+        &mut self,
+        slot: &Slot,
+        dead_pubkeys: &mut Vec<Pubkey>,
+        dead_accounts_size: usize,
+    ) {
+        if let Some(entry) = self.slot_to_pubkeys.get_mut(slot) {
+            entry.accounts.append(dead_pubkeys);
+            entry.size += dead_accounts_size;
+        } else {
+            self.slot_to_pubkeys.insert(
+                *slot,
+                DeadSlotInfo {
+                    accounts: dead_pubkeys.to_vec(),
+                    size: dead_accounts_size,
+                },
+            );
+        }
+    }
+
+    pub fn rm_slot(&mut self, slot: &Slot) {
+        if self.slot_to_pubkeys.contains_key(slot) {
+            self.slot_to_pubkeys.remove(slot);
+        }
+    }
+
+    pub fn rewritable(&self, slot: &Slot, size: usize) -> bool {
+        if let Some(entry) = self.slot_to_pubkeys.get(slot) {
+            // dead bytes are more than 25% of storage.
+            true || (entry.size * 4) > size
+        } else {
+            true
+        }
+    }
+}
+
 /// Removing unrooted slots in Accounts Background Service needs to be synchronized with flushing
 /// slots from the Accounts Cache.  This keeps track of those slots and the Mutex + Condvar for
 /// synchronization.
@@ -1633,6 +1681,8 @@ pub struct AccountsDb {
     /// Members are Slot and capacity. If capacity is smaller, then
     /// that means the storage was already shrunk.
     pub(crate) best_ancient_slots_to_shrink: RwLock<VecDeque<(Slot, u64)>>,
+
+    pub(crate) dead_accounts_pending: RwLock<DeadAccounts>,
 }
 
 /// results from 'split_storages_ancient'
@@ -2080,6 +2130,7 @@ impl AccountsDb {
             epoch_accounts_hash_manager: EpochAccountsHashManager::new_invalid(),
             latest_full_snapshot_slot: SeqLock::new(None),
             best_ancient_slots_to_shrink: RwLock::default(),
+            dead_accounts_pending: RwLock::default(),
         };
 
         new.start_background_hasher();
@@ -2772,10 +2823,10 @@ impl AccountsDb {
         }
     }
 
-    // Purge zero lamport accounts and older rooted account states as garbage
-    // collection
-    // Only remove those accounts where the entire rooted history of the account
-    // can be purged because there are no live append vecs in the ancestors
+    /// Purge zero lamport accounts and older rooted account states as
+    /// garbage collection.  Only remove those accounts where the
+    /// entire rooted history of the account can be purged because
+    /// there are no live append vecs in the ancestors.
     pub fn clean_accounts(
         &self,
         max_clean_root_inclusive: Option<Slot>,
@@ -3147,6 +3198,20 @@ impl AccountsDb {
                 i64
             ),
             (
+                "slots_with_dead_accounts",
+                self.clean_accounts_stats
+                    .slots_with_dead_accounts
+                    .swap(0, Ordering::Relaxed),
+                i64
+            ),
+            (
+                "total_dead_accounts",
+                self.clean_accounts_stats
+                    .total_dead_accounts
+                    .swap(0, Ordering::Relaxed),
+                i64
+            ),
+            (
                 "clean_old_root_us",
                 self.clean_accounts_stats
                     .clean_old_root_us
@@ -3437,15 +3502,17 @@ impl AccountsDb {
         );
     }
 
-    /// load the account index entry for the first `count` items in `accounts`
-    /// store a reference to all alive accounts in `alive_accounts`
-    /// store all pubkeys dead in `slot_to_shrink` in `pubkeys_to_unref`
-    /// return sum of account size for all alive accounts
+    /// Load the account index entry for the items in `accounts`.
+    /// Return
+    /// - a reference to all alive accounts in `alive_accounts`,
+    /// - all pubkeys dead in `slot_to_shrink` in `pubkeys_to_unref`,
+    /// - all pubkeys of zero lamport accounts with ref_count 1 in
+    ///   `zero_lamport_single_ref_pubkeys`.
     fn load_accounts_index_for_shrink<'a, T: ShrinkCollectRefs<'a>>(
         &self,
+        slot_to_shrink: Slot,
         accounts: &'a [AccountFromStorage],
         stats: &ShrinkStats,
-        slot_to_shrink: Slot,
     ) -> LoadAccountsIndexForShrink<'a, T> {
         let count = accounts.len();
         let mut alive_accounts = T::with_capacity(count, slot_to_shrink);
@@ -3655,7 +3722,7 @@ impl AccountsDb {
                         mut pubkeys_to_unref,
                         all_are_zero_lamports,
                         mut zero_lamport_single_ref_pubkeys,
-                    } = self.load_accounts_index_for_shrink(stored_accounts, stats, slot);
+                    } = self.load_accounts_index_for_shrink(slot, stored_accounts, stats);
 
                     // collect
                     alive_accounts_collect
@@ -3795,6 +3862,7 @@ impl AccountsDb {
             );
         }
 
+        // error!("remove_old_stores_shrink: drop dead_storages {dead_storages_len}");
         let (_, drop_storage_entries_elapsed) = measure_us!(drop(dead_storages));
         time.stop();
 
@@ -3956,21 +4024,27 @@ impl AccountsDb {
 
         self.unref_shrunk_dead_accounts(shrink_collect.pubkeys_to_unref.iter().cloned(), slot);
 
-        let total_accounts_after_shrink = shrink_collect.alive_accounts.len();
-        debug!(
-            "shrinking: slot: {}, accounts: ({} => {}) bytes: {} original: {}",
-            slot,
-            shrink_collect.total_starting_accounts,
-            total_accounts_after_shrink,
-            shrink_collect.alive_total_bytes,
-            shrink_collect.capacity,
-        );
-
+        //let total_accounts_after_shrink = shrink_collect.alive_accounts.len();
         let mut stats_sub = ShrinkStatsSub::default();
         let mut rewrite_elapsed = Measure::start("rewrite_elapsed");
         let (shrink_in_progress, time_us) =
             measure_us!(self.get_store_for_shrink(slot, shrink_collect.alive_total_bytes as u64));
         stats_sub.create_and_insert_store_elapsed_us = Saturating(time_us);
+        // error!("shrink_storage: slot: {}, number of accounts: existing {} -> alive {}, bytes: existing {} -> alive {}, reduction {}\nshrink_storage: old store {} new store {}",
+        //     slot,
+        //     shrink_collect.total_starting_accounts,
+        //     total_accounts_after_shrink,
+        //     shrink_collect.capacity,
+        //     shrink_collect.alive_total_bytes,
+        //     shrink_collect.capacity - shrink_collect.alive_total_bytes as u64,
+        //        match &shrink_in_progress.old_store.accounts {
+        //            AccountsFile::AppendVec(v) => v.path().to_str().unwrap(),
+        //            _ => "unknown"
+        //        },
+        //        match &shrink_in_progress.new_store.accounts {
+        //            AccountsFile::AppendVec(v) => v.path().to_str().unwrap(),
+        //            _ => "unknown"
+        //        });
 
         // here, we're writing back alive_accounts. That should be an atomic operation
         // without use of rather wide locks in this whole function, because we're
@@ -4601,6 +4675,7 @@ impl AccountsDb {
             .store(shrink_candidates_slots.len() as u64, Ordering::Relaxed);
 
         let candidates_count = shrink_candidates_slots.len();
+        log::error!("shrink_candidate_slots: dead_accounts_pending: #slots {}, #candidates {candidates_count}", self.dead_accounts_pending.read().unwrap().slot_to_pubkeys.len());
         let ((mut shrink_slots, shrink_slots_next_batch), select_time_us) = measure_us!({
             if let AccountShrinkThreshold::TotalSpace { shrink_ratio } = self.shrink_ratio {
                 let (shrink_slots, shrink_slots_next_batch) =
@@ -4670,7 +4745,13 @@ impl AccountsDb {
                                 .num_ancient_slots_shrunk
                                 .fetch_add(1, Ordering::Relaxed);
                         }
-                        self.shrink_storage(&slot_shrink_candidate);
+                        let mut dead_info = self.dead_accounts_pending.write().unwrap();
+                        if dead_info.rewritable(&slot, slot_shrink_candidate.accounts.len()) {
+                            self.shrink_storage(&slot_shrink_candidate);
+                            dead_info.rm_slot(&slot);
+                        } else {
+                            error!("shrink_candidate_slots: delay actual shrinking of slot {slot}");
+                        }
                     });
             })
         });
@@ -4683,6 +4764,8 @@ impl AccountsDb {
                 shrink_slots.insert(slot);
             }
         }
+
+        error!("shrink_candidate_slots: dead_accounts_pending: #slots {:#?} remain, selected candidates {:#?}", self.dead_accounts_pending.read().unwrap().slot_to_pubkeys.len(), num_selected);
 
         datapoint_info!(
             "shrink_candidate_slots",
@@ -7773,6 +7856,7 @@ impl AccountsDb {
                     store.remove_accounts(store.alive_bytes(), reset_accounts, offsets.len());
                     self.dirty_stores.insert(*slot, store.clone());
                     dead_slots.insert(*slot);
+                    self.dead_accounts_pending.write().unwrap().rm_slot(slot);
                 } else {
                     // not all accounts are being removed, so figure out sizes of accounts we are removing and update the alive bytes and alive account count
                     let (_, us) = measure_us!({
@@ -7780,6 +7864,22 @@ impl AccountsDb {
                         // sort so offsets are in order. This improves efficiency of loading the accounts.
                         offsets.sort_unstable();
                         let dead_bytes = store.accounts.get_account_sizes(&offsets).iter().sum();
+                        let mut dead_accounts = offsets
+                            .iter()
+                            .map(|offset| {
+                                store
+                                    .accounts
+                                    .get_stored_account_meta_callback(*offset, |stored_account| {
+                                        stored_account.pubkey().clone()
+                                    })
+                                    .unwrap()
+                            })
+                            .collect::<Vec<_>>();
+                        self.dead_accounts_pending.write().unwrap().add_for_slot(
+                            slot,
+                            &mut dead_accounts,
+                            dead_bytes,
+                        );
                         store.remove_accounts(dead_bytes, reset_accounts, offsets.len());
                         if Self::is_shrinking_productive(&store)
                             && self.is_candidate_for_shrink(&store)
@@ -7801,6 +7901,30 @@ impl AccountsDb {
         self.clean_accounts_stats
             .remove_dead_accounts_remove_us
             .fetch_add(measure.as_us(), Ordering::Relaxed);
+
+        self.clean_accounts_stats
+            .slots_with_dead_accounts
+            .fetch_add(
+                self.dead_accounts_pending
+                    .read()
+                    .unwrap()
+                    .slot_to_pubkeys
+                    .len() as u64,
+                Ordering::Relaxed,
+            );
+
+        self.clean_accounts_stats.total_dead_accounts.fetch_add(
+            self.dead_accounts_pending
+                .read()
+                .unwrap()
+                .slot_to_pubkeys
+                .iter()
+                .map(|(_, v)| v.accounts.len())
+                .collect::<Vec<usize>>()
+                .iter()
+                .sum::<usize>() as u64,
+            Ordering::Relaxed,
+        );
 
         let mut measure = Measure::start("shrink");
         let mut shrink_candidate_slots = self.shrink_candidate_slots.lock().unwrap();
