@@ -257,9 +257,9 @@ impl<'a> Iterator for AccountStorageIter<'a> {
 pub struct ShrinkInProgress<'a> {
     storage: &'a AccountStorage,
     /// old store which will be shrunk and replaced
-    old_store: Arc<AccountStorageEntry>,
+    pub old_store: Arc<AccountStorageEntry>,
     /// newly shrunk store with a subset of contents from 'old_store'
-    new_store: Arc<AccountStorageEntry>,
+    pub new_store: Arc<AccountStorageEntry>,
     slot: Slot,
 }
 

@@ -368,7 +368,9 @@ impl SnapshotRequestHandler {
         snapshot_root_bank.clean_accounts();
         clean_time.stop();
 
+        error!("Calling shrink_ancient_slots() in handle_snapshot_request");
         let (_, shrink_ancient_time_us) = measure_us!(snapshot_root_bank.shrink_ancient_slots());
+        error!("Returned from shrink_ancient_slots() in handle_snapshot_request");
 
         let mut shrink_time = Measure::start("shrink_time");
         snapshot_root_bank.shrink_candidate_slots();
@@ -674,7 +676,9 @@ impl AccountsBackgroundService {
                             last_cleaned_block_height = bank.block_height();
                             // See justification below for why we skip 'shrink' here.
                             if bank.is_startup_verification_complete() {
+                                error!("Calling shrink_ancient_slots() in ABS constructor");
                                 bank.shrink_ancient_slots();
+                                error!("Returned from shrink_ancient_slots() in ABS constructor");
                             }
                         }
                         // Do not 'shrink' until *after* the startup verification is complete.

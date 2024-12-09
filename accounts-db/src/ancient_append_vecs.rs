@@ -98,48 +98,48 @@ impl AncientSlotInfos {
         is_high_slot: bool,
         is_candidate_for_shrink: bool,
     ) -> bool {
-        let mut was_randomly_shrunk = false;
         let alive_bytes = storage.alive_bytes() as u64;
-        if alive_bytes > 0 {
-            let capacity = storage.accounts.capacity();
-            let should_shrink = if capacity > 0 {
-                if is_candidate_for_shrink {
-                    true
-                } else if can_randomly_shrink && thread_rng().gen_range(0..10000) == 0 {
-                    was_randomly_shrunk = true;
-                    true
-                } else {
-                    false
-                }
+        if alive_bytes == 0 {
+            return false;
+        }
+        let mut was_randomly_shrunk = false;
+        let capacity = storage.accounts.capacity();
+        let should_shrink = if capacity > 0 {
+            if is_candidate_for_shrink {
+                true
+            } else if can_randomly_shrink && thread_rng().gen_range(0..10000) == 0 {
+                was_randomly_shrunk = true;
+                true
             } else {
                 false
-            };
-            // two criteria we're shrinking by later:
-            // 1. alive ratio so that we don't consume too much disk space with dead accounts
-            // 2. # of active ancient roots, so that we don't consume too many open file handles
-
-            if should_shrink {
-                // alive ratio is too low, so prioritize combining this slot with others
-                // to reduce disk space used
-                self.total_alive_bytes_shrink += alive_bytes;
-                self.shrink_indexes.push(self.all_infos.len());
-            } else {
-                let already_ideal_size = u64::from(ideal_size) * 80 / 100;
-                if alive_bytes > already_ideal_size {
-                    // do not include this append vec at all. It is already ideal size and not a candidate for shrink.
-                    return was_randomly_shrunk;
-                }
             }
-            self.all_infos.push(SlotInfo {
-                slot,
-                capacity,
-                storage,
-                alive_bytes,
-                should_shrink,
-                is_high_slot,
-            });
-            self.total_alive_bytes += alive_bytes;
+        } else {
+            false
+        };
+        // two criteria we're shrinking by later:
+        // 1. alive ratio so that we don't consume too much disk space with dead accounts
+        // 2. # of active ancient roots, so that we don't consume too many open file handles
+        if should_shrink {
+            // alive ratio is too low, so prioritize combining this slot with others
+            // to reduce disk space used
+            self.total_alive_bytes_shrink += alive_bytes;
+            self.shrink_indexes.push(self.all_infos.len());
+        } else {
+            let already_ideal_size = u64::from(ideal_size) * 80 / 100;
+            if alive_bytes > already_ideal_size {
+                // do not include this append vec at all. It is already ideal size and not a candidate for shrink.
+                return was_randomly_shrunk;
+            }
         }
+        self.all_infos.push(SlotInfo {
+            slot,
+            capacity,
+            storage,
+            alive_bytes,
+            should_shrink,
+            is_high_slot,
+        });
+        self.total_alive_bytes += alive_bytes;
         was_randomly_shrunk
     }
 
@@ -150,9 +150,14 @@ impl AncientSlotInfos {
         tuning: &PackedAncientStorageTuning,
         stats: &ShrinkAncientStats,
     ) {
+        // sort the shrink_ratio_slots by most bytes saved to fewest
+        // most bytes saved is more valuable to shrink
+        self.sort_shrink_indexes_by_bytes_saved();
+
         // figure out which slots to combine
         // 1. should_shrink: largest bytes saved above some cutoff of ratio
-        self.choose_storages_to_shrink(tuning);
+        self.clear_should_shrink_after_cutoff(tuning);
+
         // 2. smallest files so we get the largest number of files to remove
         self.filter_by_smallest_capacity(tuning, stats);
     }
@@ -200,17 +205,6 @@ impl AncientSlotInfos {
                 bytes_to_shrink_due_to_ratio += info.alive_bytes;
             }
         }
-    }
-
-    /// after this function, only slots that were chosen to shrink are marked with
-    /// 'should_shrink'
-    /// There are likely more candidates to shrink than will be chosen.
-    fn choose_storages_to_shrink(&mut self, tuning: &PackedAncientStorageTuning) {
-        // sort the shrink_ratio_slots by most bytes saved to fewest
-        // most bytes saved is more valuable to shrink
-        self.sort_shrink_indexes_by_bytes_saved();
-
-        self.clear_should_shrink_after_cutoff(tuning);
     }
 
     /// truncate 'all_infos' such that when the remaining entries in
@@ -340,6 +334,7 @@ impl AccountsDb {
         sorted_slots: Vec<Slot>,
         can_randomly_shrink: bool,
     ) {
+        log::error!("combine_ancient_slots_packed: dead_accounts_pending: number of slots {:#?}", self.dead_accounts_pending.read().unwrap().slot_to_pubkeys.len());
         let tuning = PackedAncientStorageTuning {
             // Slots old enough to be ancient.
             max_ancient_slots: self.max_ancient_storages,
@@ -382,19 +377,16 @@ impl AccountsDb {
             .iter()
             .map(|alive| alive.bytes)
             .sum::<usize>();
-        let required_ideal_packed = (alive_bytes as u64 / tuning.ideal_storage_size + 1) as usize;
         if alive_bytes == 0 {
-            // nothing required, so no problem moving nothing
-            return true;
+            return true; // nothing required, so no problem moving nothing
         }
-        if target_slots_sorted.len() < required_ideal_packed {
+        let required_ideal_packed = (alive_bytes as u64 / tuning.ideal_storage_size + 1) as usize;
+        let num_target_slots = target_slots_sorted.len();
+        if num_target_slots < required_ideal_packed {
             return false;
         }
-        let i_last = target_slots_sorted
-            .len()
-            .saturating_sub(required_ideal_packed);
-
-        let highest_slot = target_slots_sorted[i_last];
+        let last_index = num_target_slots.saturating_sub(required_ideal_packed);
+        let highest_slot = target_slots_sorted[last_index];
         many_refs_newest
             .iter()
             .all(|many| many.slot <= highest_slot)
@@ -418,6 +410,7 @@ impl AccountsDb {
             .ideal_storage_size
             .store(tuning.ideal_storage_size.into(), Ordering::Relaxed);
 
+        log::error!("combine_ancient_slots_packed_internal: best_slots_to_shrink number {:#?}", ancient_slot_infos.best_slots_to_shrink.len());
         std::mem::swap(
             &mut *self.best_ancient_slots_to_shrink.write().unwrap(),
             &mut ancient_slot_infos.best_slots_to_shrink,
@@ -543,6 +536,7 @@ impl AccountsDb {
         write_ancient_accounts: &mut WriteAncientAccounts<'b>,
     ) {
         let target_slot = accounts_to_write.target_slot();
+        log::error!("write_ancient_accounts: bytes {:#?}, target_slot {:#?}", bytes, target_slot);
         let (shrink_in_progress, create_and_insert_store_elapsed_us) =
             measure_us!(self.get_store_for_shrink(target_slot, bytes));
         let (store_accounts_timing, rewrite_elapsed_us) = measure_us!(
@@ -629,6 +623,7 @@ impl AccountsDb {
         accounts_to_combine: &'b AccountsToCombine<'b>,
         packed_contents: Vec<PackedAncientStorage<'b>>,
     ) -> WriteAncientAccounts<'a> {
+        log::error!("write_packed_storages: accounts_to_combine: number of {:#?}", accounts_to_combine.accounts_to_combine.len());
         let write_ancient_accounts = Mutex::new(WriteAncientAccounts::default());
 
         // ok if we have more slots, but NOT ok if we have fewer slots than we have contents
@@ -772,12 +767,15 @@ impl AccountsDb {
         let mut target_slots_sorted = Vec::with_capacity(len);
 
         // `shrink_collect` all accounts in the append vecs we want to combine.
-        // We are no longer doing eager unref in shrink_collect. Therefore, we will no longer need to iter them serially?
-        // There is a subtle difference for zero lamport accounts, which can lead to having more multi-refs than before?
+        // We are no longer doing eager unref in shrink_collect.
+        // Therefore, we will no longer need to iter them serially?
+        // There is a subtle difference for zero lamport accounts,
+        // which can lead to having more multi-refs than before?
         // Consider account X in both slot x, and x+1 and x+2.
         // With eager unref, we will only collect `one_ref`` X at slot x+2 after shrink.
         // Without eager unref, we will collect X at `multi-ref` after shrink.
-        // Packing multi-ref is less efficient than `one_ref``. But it might be ok - in next round of clean, hopefully, it can turn this from multi-ref into one-ref.
+        // Packing multi-ref is less efficient than `one_ref`, but it might be ok.
+        // In next round of clean, hopefully, it can turn this from multi-ref into one-ref.
         let mut accounts_to_combine = accounts_per_storage
             .iter()
             .map(|(info, unique_accounts)| {
@@ -1062,6 +1060,10 @@ impl<'a> PackedAncientStorage<'a> {
                 break;
             }
             // we know the full contents of this packed storage now
+            // log::error!("Push packed ancient storage bytes {bytes_total}");
+            // for acc in &accounts_to_write {
+            //     log::error!("slot {}", acc.0);
+            // }
             result.push(PackedAncientStorage {
                 bytes: bytes_total as u64,
                 accounts: accounts_to_write,
@@ -3423,7 +3425,6 @@ pub mod tests {
     enum TestShouldShrink {
         FilterAncientSlots,
         ClearShouldShrink,
-        ChooseStoragesToShrink,
     }
 
     #[test]
@@ -3470,9 +3471,6 @@ pub mod tests {
                         }
                         TestShouldShrink::ClearShouldShrink => {
                             infos.clear_should_shrink_after_cutoff(&tuning);
-                        }
-                        TestShouldShrink::ChooseStoragesToShrink => {
-                            infos.choose_storages_to_shrink(&tuning);
                         }
                     }
 
