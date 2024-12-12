@@ -8,7 +8,7 @@ use {
     solana_accounts_db::{
         account_storage::meta::StoredMetaWriteVersion,
         accounts::Accounts,
-        accounts_db::AccountStorageEntry,
+        accounts_db::{AccountStorageEntry, DeadAccounts},
         accounts_hash::{AccountsDeltaHash, AccountsHash, AccountsHashKind},
         epoch_accounts_hash::EpochAccountsHash,
     },
@@ -31,6 +31,7 @@ pub struct AccountsPackage {
     pub slot: Slot,
     pub block_height: Slot,
     pub snapshot_storages: Vec<Arc<AccountStorageEntry>>,
+    pub dead_accounts: DeadAccounts,
     pub expected_capitalization: u64,
     pub accounts_hash_for_testing: Option<AccountsHash>,
     pub accounts: Arc<Accounts>,
@@ -51,6 +52,7 @@ impl AccountsPackage {
         package_kind: AccountsPackageKind,
         bank: &Bank,
         snapshot_storages: Vec<Arc<AccountStorageEntry>>,
+        dead_accounts: DeadAccounts,
         status_cache_slot_deltas: Vec<BankSlotDelta>,
         accounts_hash_for_testing: Option<AccountsHash>,
     ) -> Self {
@@ -94,6 +96,7 @@ impl AccountsPackage {
             package_kind,
             bank,
             snapshot_storages,
+            dead_accounts,
             accounts_hash_for_testing,
             Some(snapshot_info),
         )
@@ -105,6 +108,7 @@ impl AccountsPackage {
         package_kind: AccountsPackageKind,
         bank: &Bank,
         snapshot_storages: Vec<Arc<AccountStorageEntry>>,
+        dead_accounts: DeadAccounts,
         accounts_hash_for_testing: Option<AccountsHash>,
     ) -> Self {
         assert_eq!(package_kind, AccountsPackageKind::AccountsHashVerifier);
@@ -112,6 +116,7 @@ impl AccountsPackage {
             package_kind,
             bank,
             snapshot_storages,
+            dead_accounts,
             accounts_hash_for_testing,
             None,
         )
@@ -123,6 +128,7 @@ impl AccountsPackage {
         package_kind: AccountsPackageKind,
         bank: &Bank,
         snapshot_storages: Vec<Arc<AccountStorageEntry>>,
+        dead_accounts: DeadAccounts,
         accounts_hash_for_testing: Option<AccountsHash>,
     ) -> Self {
         assert_eq!(package_kind, AccountsPackageKind::EpochAccountsHash);
@@ -130,6 +136,7 @@ impl AccountsPackage {
             package_kind,
             bank,
             snapshot_storages,
+            dead_accounts,
             accounts_hash_for_testing,
             None,
         )
@@ -139,6 +146,7 @@ impl AccountsPackage {
         package_kind: AccountsPackageKind,
         bank: &Bank,
         snapshot_storages: Vec<Arc<AccountStorageEntry>>,
+        dead_accounts: DeadAccounts,
         accounts_hash_for_testing: Option<AccountsHash>,
         snapshot_info: Option<SupplementalSnapshotInfo>,
     ) -> Self {
@@ -147,6 +155,7 @@ impl AccountsPackage {
             slot: bank.slot(),
             block_height: bank.block_height(),
             snapshot_storages,
+            dead_accounts,
             expected_capitalization: bank.capitalization(),
             accounts_hash_for_testing,
             accounts: bank.accounts(),
@@ -169,6 +178,7 @@ impl AccountsPackage {
             slot: Slot::default(),
             block_height: Slot::default(),
             snapshot_storages: Vec::default(),
+            dead_accounts: DeadAccounts::default(),
             expected_capitalization: u64::default(),
             accounts_hash_for_testing: Option::default(),
             accounts: Arc::new(accounts),
@@ -224,6 +234,7 @@ pub struct SnapshotPackage {
     pub block_height: Slot,
     pub hash: SnapshotHash,
     pub snapshot_storages: Vec<Arc<AccountStorageEntry>>,
+    pub dead_accounts: DeadAccounts,
     pub status_cache_slot_deltas: Vec<BankSlotDelta>,
     pub bank_fields_to_serialize: BankFieldsToSerialize,
     pub bank_hash_stats: BankHashStats,
@@ -277,6 +288,7 @@ impl SnapshotPackage {
                 snapshot_info.epoch_accounts_hash.as_ref(),
             ),
             snapshot_storages: accounts_package.snapshot_storages,
+            dead_accounts: accounts_package.dead_accounts,
             status_cache_slot_deltas: snapshot_info.status_cache_slot_deltas,
             bank_fields_to_serialize: snapshot_info.bank_fields_to_serialize,
             accounts_delta_hash: snapshot_info.accounts_delta_hash,
@@ -301,6 +313,7 @@ impl SnapshotPackage {
             block_height: Slot::default(),
             hash: SnapshotHash(Hash::default()),
             snapshot_storages: Vec::default(),
+            dead_accounts: DeadAccounts::default(),
             status_cache_slot_deltas: Vec::default(),
             bank_fields_to_serialize: BankFieldsToSerialize::default_for_tests(),
             accounts_delta_hash: AccountsDeltaHash(Hash::default()),
